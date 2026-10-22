@@ -25,7 +25,8 @@ class Orchestrator:
         env_summary = await self._env_summary(environment)
         plan, plan_info = await asyncio.to_thread(
             make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
-        self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan), **plan_info)
+        self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan),
+                       planner_model=self.cfg.planner_model, **plan_info)
         bb = Blackboard(task=instruction)
         for s in plan.steps:
             bb.add(s.id, s.goal)
@@ -56,7 +57,7 @@ class Orchestrator:
 
     async def _run_step(self, step, instruction, environment, bb) -> dict:
         decision = self.router.route(step.id, step.goal)
-        self.trace.log("route", step=step.id, **decision.to_dict())
+        self.trace.log("route", step=step.id, model=self.cfg.tiers[decision.tier], **decision.to_dict())
         tier = decision.tier
         record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False}
         for attempt in range(2):  # first try + one escalated retry
@@ -67,7 +68,7 @@ class Orchestrator:
             verdict = await verify(environment, step, result.exit_status, self.cfg.check_timeout)
             self.trace.log("attempt", step=step.id, attempt=attempt + 1, tier=tier, model=model_id,
                            exit_status=result.exit_status, n_calls=result.n_calls, passed=verdict.passed,
-                           check_output=verdict.output[-500:])
+                           check=step.check, check_output=verdict.output[-500:], summary=result.summary[:300])
             record["attempts"].append({"tier": tier, "model": model_id, "exit_status": result.exit_status,
                                        "passed": verdict.passed, "n_calls": result.n_calls})
             bb.update(step.id, summary=result.summary, check_output=verdict.output[-500:])

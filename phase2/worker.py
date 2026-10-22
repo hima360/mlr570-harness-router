@@ -91,22 +91,28 @@ your_command_here
 ```"""
 
 
-def _make_model(cfg, ledger, model_id: str):
+def _make_model(cfg, ledger, model_id: str, on_call=None):
+    import time
+
     from minisweagent.models.litellm_model import LitellmModel
 
     from .cli_models import complete_fn_for, make_text_model
-    from .llm import litellm_name
+    from .llm import litellm_name, record_call
+
+    def on_result(usage, text, ms):
+        info = record_call(ledger, model_id, usage, ms, text)
+        if on_call:
+            on_call(info)
 
     if complete_fn_for(model_id) is not None:
-        return make_text_model(model_id, lambda u: ledger.add_from_usage(model_id, u),
-                               complete_fn=complete_fn_for(model_id, cfg))
+        return make_text_model(model_id, on_result, complete_fn=complete_fn_for(model_id, cfg))
 
     class LedgerModel(LitellmModel):
         def query(self, messages, **kwargs):
+            t0 = time.perf_counter()
             message = super().query(messages, **kwargs)
             usage = (message.get("extra", {}).get("response") or {}).get("usage")
-            if usage:
-                ledger.add_from_usage(model_id, usage)
+            on_result(usage, message.get("content"), (time.perf_counter() - t0) * 1e3)
             return message
 
     return LedgerModel(model_name=litellm_name(model_id), cost_tracking="ignore_errors",
@@ -114,14 +120,15 @@ def _make_model(cfg, ledger, model_id: str):
 
 
 def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, step, blackboard_text: str,
-               model=None, output_path=None) -> WorkerResult:
-    """Blocking: call inside asyncio.to_thread. `model` is injectable for tests."""
+               model=None, output_path=None, on_call=None) -> WorkerResult:
+    """Blocking: call inside asyncio.to_thread. `model` is injectable for tests; `on_call(info)` gets
+    one record per model call."""
     from minisweagent.agents.default import DefaultAgent
     from minisweagent.models.litellm_textbased_model import LitellmTextbasedModel
 
     from .cli_models import complete_fn_for
 
-    model = model or _make_model(cfg, ledger, model_id)
+    model = model or _make_model(cfg, ledger, model_id, on_call)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""

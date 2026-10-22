@@ -54,11 +54,13 @@ class RoutedHarness(BaseAgent):
                                    max_output_chars=self.cfg.max_observation_chars)
 
         def ask_planner(messages):
-            return chat(self.cfg, ledger, self.cfg.planner_model, messages)
+            return chat(self.cfg, ledger, self.cfg.planner_model, messages,
+                        on_call=lambda info: trace.log("llm_call", role="planner", **info))
 
         def work(step, model_id, blackboard_text, output_path):
             return run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=step,
-                              blackboard_text=blackboard_text, output_path=output_path)
+                              blackboard_text=blackboard_text, output_path=output_path,
+                              on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info))
 
         orch = Orchestrator(self.cfg, ledger, trace, Router(self.cfg), ask_planner, work, logs)
 

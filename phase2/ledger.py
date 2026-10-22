@@ -50,16 +50,22 @@ class Ledger:
             u.claude_code_cost_usd += float(claude_code_cost_usd or 0)
         return c
 
-    def add_from_usage(self, model: str, usage) -> float:
-        """Accept an OpenAI-style usage object or dict (prompt/completion tokens + cache details)."""
+    @staticmethod
+    def read_usage(usage) -> dict:
+        """OpenAI-style usage object or dict (prompt/completion tokens + cache details) -> plain fields."""
         get = (lambda k, d=None: usage.get(k, d)) if isinstance(usage, dict) else (
             lambda k, d=None: getattr(usage, k, d))
         details = get("prompt_tokens_details") or {}
         cached = (details.get("cached_tokens") if isinstance(details, dict)
                   else getattr(details, "cached_tokens", 0)) or 0
-        return self.add(model, int(get("prompt_tokens", 0) or 0), int(cached),
-                        int(get("completion_tokens", 0) or 0), get("factory_credits"),
-                        get("claude_code_cost_usd"))
+        return {"input_tokens": int(get("prompt_tokens", 0) or 0), "cached_tokens": int(cached),
+                "output_tokens": int(get("completion_tokens", 0) or 0),
+                "factory_credits": get("factory_credits"), "claude_code_cost_usd": get("claude_code_cost_usd")}
+
+    def add_from_usage(self, model: str, usage) -> float:
+        u = self.read_usage(usage)
+        return self.add(model, u["input_tokens"], u["cached_tokens"], u["output_tokens"],
+                        u["factory_credits"], u["claude_code_cost_usd"])
 
     def totals(self) -> Usage:
         t = Usage()

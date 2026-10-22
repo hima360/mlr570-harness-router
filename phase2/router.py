@@ -38,12 +38,15 @@ class RouteDecision:
     score: float | None = None
     confidence: float | None = None
     ms: float = 0.0
+    router: str = ""  # who actually decided: the scorer model, or a policy that uses no model
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 class LayaScorer:
+    name = "Laya (laya_mlx, local MLX)"
+
     def __init__(self):
         self._agent = None
 
@@ -58,6 +61,8 @@ class LayaScorer:
 
 class ArchScorer:
     """Port of router-bench/run_hf.py `arch`: softmax over summed log-probs of each route name."""
+
+    name = "Arch-Router-1.5B (katanemo, local)"
 
     def __init__(self, device: str = "mps"):
         self.device = device
@@ -114,21 +119,27 @@ class Router:
             tier = int(p.split(":", 1)[1])
             if not 0 <= tier < len(self.cfg.tiers):
                 raise ValueError(f"fixed tier {tier} out of range")
-            return RouteDecision(tier, "fixed")
+            return RouteDecision(tier, "fixed", router=f"fixed policy (tier {tier}, no model)")
         if p == "random":
             h = hashlib.sha256(f"{self.cfg.random_seed}:{step_id}:{text}".encode()).digest()
-            return RouteDecision(h[0] % (self.max_tier + 1), "random")
+            return RouteDecision(h[0] % (self.max_tier + 1), "random", router="random policy (no model)")
+        ms = lambda: (time.perf_counter() - t0) * 1e3  # noqa: E731
         if p == "arch":
             s = self.arch(text)
-            return RouteDecision(self._clip(s), "arch", s, None, (time.perf_counter() - t0) * 1e3)
+            return RouteDecision(self._clip(s), "arch", s, None, ms(), _name(self.arch))
         if p not in ("laya", "cascade"):
             raise ValueError(f"unknown policy {p!r}")
         s, conf = self.laya(text)
         if p == "laya" or conf >= self.cfg.confidence_threshold:
-            return RouteDecision(self._clip(s), "laya", s, conf, (time.perf_counter() - t0) * 1e3)
+            return RouteDecision(self._clip(s), "laya", s, conf, ms(), _name(self.laya))
         try:
             a = self.arch(text)
         except ImportError:
-            return RouteDecision(self._clip(s), "laya (arch unavailable)", s, conf,
-                                 (time.perf_counter() - t0) * 1e3)
-        return RouteDecision(self._clip(a), "arch", a, conf, (time.perf_counter() - t0) * 1e3)
+            return RouteDecision(self._clip(s), "laya (arch unavailable)", s, conf, ms(),
+                                 f"{_name(self.laya)}; Arch-Router fallback not installed")
+        return RouteDecision(self._clip(a), "arch", a, conf, ms(),
+                             f"{_name(self.arch)} (Laya conf {conf:.2f} < {self.cfg.confidence_threshold})")
+
+
+def _name(scorer) -> str:
+    return getattr(scorer, "name", None) or type(scorer).__name__

@@ -5,12 +5,21 @@ lists the valid ids). Each call is stateless: the whole conversation is serializ
 prompt. Droid adds its own system prompt (~7k input tokens per call, measured 2026-10-22), so
 token counts and costs here are inflated versus a raw API and are for the demo only.
 """
+import os
 import tempfile
 from pathlib import Path
 
 from .cli_models import openai_usage, run_cli, run_group, serialize
 
 PREFIX = "droid/"
+APP_DROID = "/Applications/Factory.app/Contents/Resources/bin/droid"
+
+
+def droid_bin() -> str:
+    """PHASE2_DROID_BIN, else the Factory app's bundled droid (updated with the app), else droid on PATH.
+    An older droid on PATH (0.226.1 here) falls back to a stale built-in model list when it cannot fetch
+    the live catalog, and then rejects current models like gpt-6-sol as invalid."""
+    return os.environ.get("PHASE2_DROID_BIN") or (APP_DROID if Path(APP_DROID).exists() else "droid")
 
 
 def is_droid(model: str) -> bool:
@@ -26,7 +35,7 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
         prompt.write_text(serialize(messages))
         # Only TodoWrite (no side effects) stays allowed: otherwise Droid's read-only Execute, Read,
         # Grep, WebSearch and FetchUrl run on the host, outside the harness and the task container.
-        argv = ["droid", "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
+        argv = [droid_bin(), "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
                 "--only-tools", "TodoWrite", "-f", str(prompt)] + (["-r", effort] if effort else [])
         result = run_cli(lambda: run(argv, cwd=d, capture_output=True, text=True, timeout=timeout),
                          "droid exec")

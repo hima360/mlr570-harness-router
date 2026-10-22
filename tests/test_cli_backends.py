@@ -39,11 +39,23 @@ def test_droid_complete_uses_fake_run():
     text, usage = droid.complete("droid/glm-5.3-flash", [{"role": "system", "content": "be brief"},
                                                          {"role": "user", "content": "say hi"}], run=fake_run)
     assert text == "hi there"
-    assert seen["argv"][:6] == ["droid", "exec", "-m", "glm-5.3-flash", "-o", "json"]
+    assert seen["argv"][0].endswith("droid") and seen["argv"][1:6] == ["exec", "-m", "glm-5.3-flash", "-o", "json"]
     assert seen["argv"][seen["argv"].index("--only-tools") + 1] == "TodoWrite"
     assert "### SYSTEM\nbe brief" in seen["prompt"] and seen["prompt"].endswith("### ASSISTANT\n")
     assert usage["prompt_tokens"] == 45 and usage["prompt_tokens_details"]["cached_tokens"] == 30
     assert usage["completion_tokens"] == 7 and usage["factory_credits"] == 465
+
+
+def test_droid_binary_choice(monkeypatch, tmp_path):
+    monkeypatch.setenv("PHASE2_DROID_BIN", "/opt/droid")
+    assert droid.droid_bin() == "/opt/droid"
+    monkeypatch.delenv("PHASE2_DROID_BIN")
+    monkeypatch.setattr(droid, "APP_DROID", str(tmp_path / "missing"))
+    assert droid.droid_bin() == "droid"
+    app = tmp_path / "droid"
+    app.write_text("")
+    monkeypatch.setattr(droid, "APP_DROID", str(app))
+    assert droid.droid_bin() == str(app)
 
 
 def test_droid_complete_raises_on_error_result():
@@ -109,7 +121,7 @@ def test_worker_with_cli_text_model(model_id, capfd):
                                "prompt_tokens_details": {"cached_tokens": 0}, "factory_credits": 420}
 
     led = Ledger(load_config(ROOT / "configs/phase2-claude-code.json").prices_per_million, credits_usd=None)
-    model = make_text_model(model_id, lambda u: led.add_from_usage(model_id, u), complete_fn=fake_complete)
+    model = make_text_model(model_id, lambda u, *_: led.add_from_usage(model_id, u), complete_fn=fake_complete)
 
     async def main():
         adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
@@ -288,7 +300,7 @@ def test_worker_stops_at_step_wall_time():
 
     led = Ledger({}, credits_usd=None)
     model_id = "droid/glm-5.3-flash"
-    model = make_text_model(model_id, lambda u: led.add_from_usage(model_id, u), complete_fn=slow_complete)
+    model = make_text_model(model_id, lambda u, *_: led.add_from_usage(model_id, u), complete_fn=slow_complete)
     cfg = load_config(step_wall_time_sec=1, worker_step_limit=50)
 
     async def main():
@@ -313,3 +325,32 @@ def test_long_command_output_is_clipped():
     out = asyncio.run(main())["output"]
     assert out.startswith("A" * 500) and out.endswith("B" * 500) and "11000 characters elided" in out
     assert clip_output("short", 1000) == "short" and clip_output("x" * 50, 0) == "x" * 50
+
+
+# ---------- who did what: every actor is recorded ----------
+
+def test_actor_records_for_planner_router_and_worker(monkeypatch):
+    from phase2 import llm
+    from phase2.cli_models import make_text_model
+
+    monkeypatch.setattr(droid, "complete", lambda model, messages, **kw: (
+        "PLAN TEXT", {"prompt_tokens": 900, "completion_tokens": 40, "factory_credits": 700}))
+    cfg = load_config(ROOT / "configs/phase2-droid.json")
+    calls = []
+    assert llm.chat(cfg, Ledger({}), "droid/gpt-6-sol", [{"role": "user", "content": "plan"}],
+                    on_call=calls.append) == "PLAN TEXT"
+    assert calls[0]["model"] == "droid/gpt-6-sol" and calls[0]["input_tokens"] == 900
+    assert calls[0]["factory_credits"] == 700 and calls[0]["reply"] == "PLAN TEXT" and "ms" in calls[0]
+
+    d = Router(load_config(policy="laya"), laya=FakeScorer((1.0, 0.9)), arch=None).route("s", "x")
+    assert d.router == "FakeScorer"
+    assert Router(load_config(policy="fixed:2"), laya=None, arch=None).route("s", "x").router.startswith("fixed policy")
+    from phase2.router import LayaScorer
+    assert Router(load_config(policy="laya"), laya=LayaScorer(), arch=None).laya.name.startswith("Laya")
+
+    worker_calls = []
+    led = Ledger({})
+    from phase2.worker import _make_model
+    m = _make_model(cfg, led, "droid/glm-5.3-flash", on_call=worker_calls.append)
+    m._query([{"role": "user", "content": "go"}])
+    assert worker_calls[0]["model"] == "droid/glm-5.3-flash" and led.totals().calls == 1

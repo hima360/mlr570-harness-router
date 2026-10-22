@@ -1,5 +1,6 @@
-"""Model calls through opencodex (OpenAI-compatible /v1/chat/completions)."""
+"""Model calls through opencodex (OpenAI-compatible /v1/chat/completions) or a CLI backend."""
 import os
+import time
 
 os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")
 
@@ -9,20 +10,30 @@ def litellm_name(model: str) -> str:
     return f"openai/{model}"
 
 
-def chat(cfg, ledger, model: str, messages: list[dict], **kwargs) -> str:
-    """One blocking chat call; records usage on the ledger and returns the reply text."""
+def record_call(ledger, model: str, usage, ms: float, reply: str) -> dict:
+    """Charge one model call to the ledger; returns what the trace shows for it (who, how long, how much)."""
+    u = ledger.read_usage(usage) if usage is not None else {}
+    cost = ledger.add_from_usage(model, usage) if usage is not None else 0.0
+    return {"model": model, "ms": round(ms), **{k: v for k, v in u.items() if v},
+            "cost_usd": round(cost, 6), "reply": " ".join(str(reply or "").split())[:300]}
+
+
+def chat(cfg, ledger, model: str, messages: list[dict], on_call=None, **kwargs) -> str:
+    """One blocking chat call; records usage on the ledger and returns the reply text.
+    `on_call(info)` gets the call record (model, ms, tokens, cost, reply snippet)."""
     from .cli_models import complete_fn_for
 
+    t0 = time.perf_counter()
     cli_complete = complete_fn_for(model, cfg)
     if cli_complete is not None:
         text, usage = cli_complete(model, messages)
-        ledger.add_from_usage(model, usage)
-        return text
+    else:
+        import litellm
 
-    import litellm
-
-    resp = litellm.completion(model=litellm_name(model), messages=messages,
-                              api_base=cfg.base_url, api_key=cfg.api_key, **kwargs)
-    if getattr(resp, "usage", None) is not None:
-        ledger.add_from_usage(model, resp.usage)
-    return resp.choices[0].message.content or ""
+        resp = litellm.completion(model=litellm_name(model), messages=messages,
+                                  api_base=cfg.base_url, api_key=cfg.api_key, **kwargs)
+        text, usage = resp.choices[0].message.content or "", getattr(resp, "usage", None)
+    info = record_call(ledger, model, usage, (time.perf_counter() - t0) * 1e3, text)
+    if on_call:
+        on_call(info)
+    return text

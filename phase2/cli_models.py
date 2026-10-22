@@ -109,8 +109,9 @@ def complete_fn_for(model: str, cfg=None):
         return fn
     return functools.partial(fn, effort=(cfg.reasoning_effort or {}).get(model), timeout=cfg.cli_timeout_sec)
 
-def make_text_model(model: str, on_usage, complete_fn=None):
-    """mini-swe-agent text-based model whose completions come from a CLI backend."""
+def make_text_model(model: str, on_result, complete_fn=None):
+    """mini-swe-agent text-based model whose completions come from a CLI backend.
+    `on_result(usage, text, ms)` is called after every completion."""
     import litellm
     from minisweagent.models.litellm_textbased_model import LitellmTextbasedModel
 
@@ -118,8 +119,9 @@ def make_text_model(model: str, on_usage, complete_fn=None):
 
     class CliTextModel(LitellmTextbasedModel):
         def _query(self, messages, **kwargs):
+            t0 = time.perf_counter()
             text, usage = complete_fn(model, messages)
-            on_usage(usage)
+            on_result(usage, text, (time.perf_counter() - t0) * 1e3)
             return litellm.ModelResponse(
                 model=model,
                 choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": text}}],
