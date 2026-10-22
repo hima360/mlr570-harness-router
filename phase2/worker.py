@@ -96,7 +96,7 @@ def _make_model(cfg, ledger, model_id: str, on_call=None):
 
     from minisweagent.models.litellm_model import LitellmModel
 
-    from .cli_models import complete_fn_for, make_text_model
+    from .cli_models import IdleGuard, StepIdle, complete_fn_for, make_text_model
     from .llm import litellm_name, record_call
 
     def on_result(usage, text, ms):
@@ -105,9 +105,19 @@ def _make_model(cfg, ledger, model_id: str, on_call=None):
             on_call(info)
 
     if complete_fn_for(model_id) is not None:
-        return make_text_model(model_id, on_result, complete_fn=complete_fn_for(model_id, cfg))
+        return make_text_model(model_id, on_result, complete_fn=complete_fn_for(model_id, cfg),
+                               idle_sec=cfg.step_idle_sec)
+    guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):
+        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle]
+
+        def _query(self, messages, **kwargs):
+            guard.check()
+            response = super()._query(messages, **kwargs)
+            guard.progress()
+            return response
+
         def query(self, messages, **kwargs):
             t0 = time.perf_counter()
             message = super().query(messages, **kwargs)

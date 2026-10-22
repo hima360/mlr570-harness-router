@@ -27,6 +27,9 @@ ROLE_STYLE = {"PLANNER": "bold magenta", "ROUTER": "bold cyan", "WORKER": "bold 
               "ESCALATE": "bold yellow", "DONE": "bold white"}
 LEGACY_ROUTER = {"laya": "Laya (laya_mlx, local MLX)", "arch": "Arch-Router-1.5B (katanemo, local)",
                  "fixed": "fixed policy (no model)", "random": "random policy (no model)"}
+EXIT_REASON = {"StepIdle": "no model reply for too long", "TimeExceeded": "hit the step's time cap",
+               "LimitsExceeded": "used all its turns", "RepeatedFormatError": "kept replying in the wrong format",
+               "RuntimeError": "a model call kept failing"}
 CMD_RE = re.compile(r"```mswea_bash_command\s*(.*?)(?:```|$)", re.S)
 
 
@@ -516,7 +519,7 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                                          "no test for this step, so the worker's word was accepted"
                                          if a.get("passed") else "no test, and the worker did not finish")
                 if a.get("exit_status") not in (None, "Submitted"):
-                    text.append(f" (worker stopped early: {a['exit_status']})", style="dim")
+                    text.append(f" (worker stopped: {EXIT_REASON.get(a['exit_status'], a['exit_status'])})", style="dim")
                 children.append((f"{sid}/a{n}/check", text, []))
         if esc and not any(k == f"{sid}/esc" for k, _, _ in children):
             children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold yellow"), "to ",
@@ -554,7 +557,7 @@ class NewRunScreen(ModalScreen):
                          value="laya", allow_blank=False, id="policy")
             with Horizontal(id="caps"):
                 for key, val, hint in (("max_plan_steps", "5", "max steps"), ("worker_step_limit", "25", "turns/step"),
-                                       ("step_wall_time_sec", "900", "sec/step")):
+                                       ("step_idle_sec", "600", "stop step after N sec idle")):
                     with Vertical():
                         yield Label(hint)
                         yield Input(val, type="integer", id=key)
@@ -570,7 +573,7 @@ class NewRunScreen(ModalScreen):
 
     def _values(self) -> dict:
         caps = {k: self.query_one(f"#{k}", Input).value.strip()
-                for k in ("max_plan_steps", "worker_step_limit", "step_wall_time_sec")}
+                for k in ("max_plan_steps", "worker_step_limit", "step_idle_sec")}
         return {"task": self.query_one("#task", Select).value, "config": self.query_one("#config", Select).value,
                 "policy": self.query_one("#policy", Select).value, "caps": caps,
                 "job_name": self.query_one("#job_name", Input).value.strip()}

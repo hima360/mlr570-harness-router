@@ -109,18 +109,46 @@ def complete_fn_for(model: str, cfg=None):
         return fn
     return functools.partial(fn, effort=(cfg.reasoning_effort or {}).get(model), timeout=cfg.cli_timeout_sec)
 
-def make_text_model(model: str, on_result, complete_fn=None):
+class StepIdle(Exception):
+    """No model reply for too long: ends the step attempt (mini-swe-agent does not retry it)."""
+
+
+class IdleGuard:
+    """Ends a step only when it stops making progress (no model reply for `idle_sec`), so a slow but
+    working model keeps going. Checked before every model call, including mini-swe-agent's retries
+    (up to 10, with backoff) after failed calls."""
+
+    def __init__(self, idle_sec: float):
+        self.idle_sec = idle_sec
+        self.last = time.monotonic()
+
+    def check(self) -> None:
+        idle = time.monotonic() - self.last
+        if self.idle_sec and idle > self.idle_sec:
+            raise StepIdle(f"no model reply for {idle / 60:.0f} min (limit {self.idle_sec / 60:.0f} min)")
+
+    def progress(self) -> None:
+        self.last = time.monotonic()
+
+
+def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
+    from minisweagent.models.litellm_model import LitellmModel
     from minisweagent.models.litellm_textbased_model import LitellmTextbasedModel
 
     complete_fn = complete_fn or complete_fn_for(model)
+    guard = IdleGuard(idle_sec)
 
     class CliTextModel(LitellmTextbasedModel):
+        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle]
+
         def _query(self, messages, **kwargs):
+            guard.check()
             t0 = time.perf_counter()
             text, usage = complete_fn(model, messages)
+            guard.progress()
             on_result(usage, text, (time.perf_counter() - t0) * 1e3)
             return litellm.ModelResponse(
                 model=model,

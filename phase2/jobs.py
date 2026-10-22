@@ -185,21 +185,45 @@ def compose_project(trial_dir: Path) -> str:
     return trial_dir.name.lower()
 
 
+def descendant_groups(pid: int, ps_output: str | None = None) -> set[int]:
+    """Process groups of every descendant of `pid`. Each droid/claude call runs in its own group (so a
+    timeout can kill it cleanly), so killing the run's group alone would leave those calls running."""
+    if ps_output is None:
+        ps_output = subprocess.run(["ps", "-Ao", "pid=,ppid=,pgid="], capture_output=True, text=True).stdout
+    rows = [tuple(int(x) for x in line.split()) for line in ps_output.splitlines() if len(line.split()) == 3]
+    children: dict[int, list[tuple[int, int]]] = {}
+    for p, pp, g in rows:
+        children.setdefault(pp, []).append((p, g))
+    groups, stack = set(), [pid]
+    while stack:
+        for p, g in children.get(stack.pop(), []):
+            groups.add(g)
+            stack.append(p)
+    return groups
+
+
 def stop_run(job: Job, run=subprocess.run, grace_sec: float = 5.0) -> list[str]:
-    """Kill the run's process group, then remove the trial's leftover containers and network."""
+    """Kill the run's process group and its model calls' groups, then remove the trial's leftover
+    containers and network."""
     done = []
     if pid_alive(job.pid):
-        for sig in (signal.SIGINT, signal.SIGKILL):
+        # Collect the model calls' groups first: once the run dies they reparent and cannot be traced back.
+        calls = descendant_groups(job.pid) - {job.pid}
+        # SIGKILL straight away: Harbor ignored SIGINT/SIGTERM in practice, and any grace period lets
+        # mini-swe-agent retry a killed call in a fresh group that would then be orphaned.
+        try:
+            os.killpg(job.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        deadline = time.time() + grace_sec
+        while time.time() < deadline and pid_alive(job.pid):
+            time.sleep(0.2)
+        for g in calls:
             try:
-                os.killpg(job.pid, sig)
-            except (ProcessLookupError, PermissionError):  # group already gone (or only a zombie left)
-                break
-            deadline = time.time() + grace_sec
-            while time.time() < deadline and pid_alive(job.pid):
-                time.sleep(0.2)
-            if not pid_alive(job.pid):
-                break
-        done.append(f"stopped process group {job.pid}")
+                os.killpg(g, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        done.append(f"stopped process group {job.pid}" + (f" and {len(calls)} model call(s)" if calls else ""))
     if job.trial_dir:
         name = compose_project(job.trial_dir)
         ids = run(["docker", "ps", "-aq", "--filter", f"name={name}"], capture_output=True, text=True).stdout.split()

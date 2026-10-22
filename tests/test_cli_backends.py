@@ -354,3 +354,40 @@ def test_actor_records_for_planner_router_and_worker(monkeypatch):
     m = _make_model(cfg, led, "droid/glm-5.3-flash", on_call=worker_calls.append)
     m._query([{"role": "user", "content": "go"}])
     assert worker_calls[0]["model"] == "droid/glm-5.3-flash" and led.totals().calls == 1
+
+
+def test_idle_limit_stops_a_stuck_step_but_not_a_slow_one():
+    import time as _time
+
+    from phase2.cli_models import make_text_model
+
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\ndone\n", 0) if SUBMIT in cmd else ("ok", 0))
+    model_id = "droid/glm-5.3-flash"
+
+    def run(complete, idle):
+        led = Ledger({})
+        model = make_text_model(model_id, lambda u, *_: led.add_from_usage(model_id, u), complete_fn=complete,
+                                idle_sec=idle)
+        cfg = load_config(step_idle_sec=idle, worker_step_limit=20)
+
+        async def main():
+            adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+            return await asyncio.to_thread(run_worker, cfg, led, model_id, adapter, task_overall="T",
+                                           step=Step(id="s1", goal="g"), blackboard_text="-", model=model)
+        return asyncio.run(main())
+
+    replies = iter(["```mswea_bash_command\nls\n```"] * 3 + [f"```mswea_bash_command\nprintf '{SUBMIT}\\ndone\\n'\n```"])
+
+    def slow_but_working(model, messages):
+        _time.sleep(0.4)
+        return next(replies), {"prompt_tokens": 1, "completion_tokens": 1}
+
+    assert run(slow_but_working, 0.6).exit_status == "Submitted"  # 4 calls x 0.4 s > 0.6 s total, never idle
+
+    def stuck(model, messages):
+        _time.sleep(0.7)
+        raise RuntimeError("droid exec failed: Connection error.")
+
+    t0 = _time.monotonic()
+    res = run(stuck, 0.5)
+    assert res.exit_status == "StepIdle" and "no model reply" in res.summary and _time.monotonic() - t0 < 10

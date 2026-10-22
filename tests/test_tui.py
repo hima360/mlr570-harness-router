@@ -150,7 +150,7 @@ def test_tui_shows_job_and_starts_a_run(tmp_path):
 
     launched = asyncio.run(main())
     assert launched and launched[0][0] == J.SMOKE_TASK and launched[0][2] == "laya"
-    assert launched[0][3] == {"max_plan_steps": "5", "worker_step_limit": "25", "step_wall_time_sec": "900"}
+    assert launched[0][3] == {"max_plan_steps": "5", "worker_step_limit": "25", "step_idle_sec": "600"}
 
 
 def test_story_reads_like_a_log_of_who_did_what():
@@ -214,3 +214,26 @@ def test_overview_shows_escalation_between_attempts():
     assert kids[3].startswith("Escalated: the first attempt did not pass, so the step goes to DeepSeek V4.1 Flash")
     assert kids[3].endswith("with the first attempt's notes")
     assert kids[4] == "Worker: DeepSeek V4.1 Flash (via Droid) (second try, one tier up)"
+
+
+def test_stop_run_also_kills_model_calls_in_their_own_groups(tmp_path):
+    ps = "100 1 100\n101 100 100\n102 101 102\n103 102 102\n200 1 200\n"
+    assert J.descendant_groups(100, ps) == {100, 102}
+    job_dir = make_job(tmp_path, "tree", reward=None)
+    # run (own group) -> child -> "model call" started in its own session, like run_group does
+    code = ("import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+            "start_new_session=True); time.sleep(60)")
+    p = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
+    time.sleep(0.8)
+    call_groups = J.descendant_groups(p.pid) - {p.pid}
+    assert call_groups
+    (tmp_path / "jobs" / "tree.run.json").write_text(json.dumps({"pid": p.pid, "started": time.time()}))
+    J.stop_run(J.load_job(job_dir), run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""), grace_sec=2)
+    p.wait(timeout=5)
+    time.sleep(0.3)
+    for g in call_groups:
+        try:
+            os.killpg(g, 0)
+            raise AssertionError(f"model call group {g} still alive")
+        except ProcessLookupError:
+            pass
