@@ -43,6 +43,27 @@ def parse_result(proc, cli: str) -> dict:
     return result
 
 
+def run_group(argv, *, input=None, cwd=None, env=None, timeout=None, capture_output=True, text=True):
+    """subprocess.run, but a timeout kills the CLI's whole process group. subprocess.run only kills
+    the CLI itself; its helper processes keep the output pipe open and the call blocks past the
+    timeout (a droid exec call ran 14 min against a 10 min timeout)."""
+    import os
+    import signal
+
+    p = subprocess.Popen(argv, stdin=subprocess.PIPE if input is not None else None,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=env, text=text,
+                         start_new_session=True)
+    try:
+        out, err = p.communicate(input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.communicate()
+        raise subprocess.TimeoutExpired(argv, timeout) from None
+    return subprocess.CompletedProcess(argv, p.returncode, out, err)
+
 RETRY_WAIT_SEC = 5.0
 
 

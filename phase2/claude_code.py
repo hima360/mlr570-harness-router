@@ -5,10 +5,9 @@ with no tools, no session file and safe mode (no CLAUDE.md, hooks, skills or MCP
 system prompt instead of Claude Code's, which keeps the per-call overhead small.
 """
 import os
-import subprocess
 import tempfile
 
-from .cli_models import PROMPT_HEADER, openai_usage, run_cli, serialize
+from .cli_models import PROMPT_HEADER, openai_usage, run_cli, run_group, serialize
 
 PREFIX = "claude/"
 
@@ -23,7 +22,7 @@ def is_claude_code(model: str) -> bool:
 
 
 def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600,
-             run=subprocess.run) -> tuple[str, dict]:
+             run=run_group) -> tuple[str, dict]:
     """Returns (reply text, OpenAI-style usage incl. claude_code_cost_usd). `run` is injectable for tests."""
     model_id = model[len(PREFIX):] if is_claude_code(model) else model
     system = "\n\n".join(str(m.get("content") or "") for m in messages if m.get("role") == "system")

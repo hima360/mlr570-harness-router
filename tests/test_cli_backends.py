@@ -259,3 +259,15 @@ def test_cli_timeout_from_config_and_retried_once():
     with pytest.raises(RuntimeError, match="timed out after 42 s"):
         complete_fn_for("droid/glm-5.3-flash", cfg)("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
                                                    run=always_stalls)
+
+
+def test_run_group_timeout_kills_helper_processes():
+    import time
+
+    from phase2.cli_models import run_group
+
+    t0 = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_group(["sh", "-c", "sleep 30 & sleep 30"], timeout=0.5)  # background child holds the pipe
+    assert time.monotonic() - t0 < 5
+    assert run_group(["sh", "-c", "cat"], input="hi", timeout=5).stdout == "hi"
