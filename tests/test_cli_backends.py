@@ -235,3 +235,27 @@ def test_cli_does_not_retry_after_a_model_turn():
         claude_code.complete("claude/claude-haiku-5-5", [{"role": "user", "content": "x"}],
                              run=_ok_run(calls, fail_first=9, fail_stdout=after_turn))
     assert len(calls) == 1
+
+
+def test_cli_timeout_from_config_and_retried_once():
+    from phase2.cli_models import complete_fn_for
+
+    cfg = load_config(ROOT / "configs/phase2-droid.json", cli_timeout_sec=42)
+    seen = []
+
+    def stalls_once(argv, timeout, **kw):
+        seen.append(timeout)
+        if len(seen) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+
+    text, _ = complete_fn_for("droid/glm-5.3-flash", cfg)("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                                                       run=stalls_once)
+    assert text == "ok" and seen == [42, 42]
+
+    def always_stalls(argv, timeout, **kw):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    with pytest.raises(RuntimeError, match="timed out after 42 s"):
+        complete_fn_for("droid/glm-5.3-flash", cfg)("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                                                   run=always_stalls)

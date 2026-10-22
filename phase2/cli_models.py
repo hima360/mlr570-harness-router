@@ -6,6 +6,7 @@ overhead, so token counts here are inflated versus a raw API.
 """
 import functools
 import json
+import subprocess
 import time
 
 PROMPT_HEADER = ("You are acting as a plain language model inside another program. Do not use any "
@@ -46,10 +47,16 @@ RETRY_WAIT_SEC = 5.0
 
 
 def run_cli(call, cli: str, attempts: int = 2) -> dict:
-    """call() -> CompletedProcess. Retries only failures where no model turn ran (nothing billed):
-    network drops and transient model-catalog errors have each killed a whole trial before."""
+    """call() -> CompletedProcess. Retries once on a timeout (a provider stream that stalled) and on
+    failures where no model turn ran (nothing billed): network drops and transient model-catalog
+    errors have each killed a whole trial before."""
     for i in range(attempts):
-        proc = call()
+        try:
+            proc = call()
+        except subprocess.TimeoutExpired as e:
+            if i == attempts - 1:
+                raise RuntimeError(f"{cli} timed out after {e.timeout:.0f} s") from e
+            continue
         try:
             return parse_result(proc, cli)
         except RuntimeError:
@@ -77,8 +84,9 @@ def complete_fn_for(model: str, cfg=None):
         fn = claude_code.complete
     else:
         return None
-    effort = (getattr(cfg, "reasoning_effort", None) or {}).get(model)
-    return functools.partial(fn, effort=effort) if effort else fn
+    if cfg is None:
+        return fn
+    return functools.partial(fn, effort=(cfg.reasoning_effort or {}).get(model), timeout=cfg.cli_timeout_sec)
 
 def make_text_model(model: str, on_usage, complete_fn=None):
     """mini-swe-agent text-based model whose completions come from a CLI backend."""

@@ -37,6 +37,8 @@ class HarnessConfig:
     prices_source: str = ""  # where and when the list prices were checked
     # CLI models only: model id -> effort level (droid -r / claude --effort). Missing = CLI default.
     reasoning_effort: dict = field(default_factory=dict)
+    # Per CLI call. The slowest healthy call seen took 41 s; a stalled provider stream hung for 10 min.
+    cli_timeout_sec: int = 180
     max_plan_steps: int = 8
     max_parallel: int = 3
     worker_step_limit: int = 40
