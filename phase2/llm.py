@@ -11,6 +11,13 @@ def litellm_name(model: str) -> str:
 
 def chat(cfg, ledger, model: str, messages: list[dict], **kwargs) -> str:
     """One blocking chat call; records usage on the ledger and returns the reply text."""
+    from . import droid
+
+    if droid.is_droid(model):
+        text, usage = droid.complete(model, messages)
+        ledger.add_from_usage(model, usage)
+        return text
+
     import litellm
 
     resp = litellm.completion(model=litellm_name(model), messages=messages,

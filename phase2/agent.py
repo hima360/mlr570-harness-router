@@ -44,7 +44,7 @@ class RoutedHarness(BaseAgent):
     async def run(self, instruction: str, environment, context) -> None:
         logs = Path(self.logs_dir)
         logs.mkdir(parents=True, exist_ok=True)
-        ledger = Ledger(self.cfg.prices_per_million)
+        ledger = Ledger(self.cfg.prices_per_million, credits_usd=self.cfg.credits_usd)
         trace = Trace(logs / "trace.jsonl")
         trace.log("config", **self.cfg.to_dict())
         loop = asyncio.get_running_loop()
@@ -61,7 +61,8 @@ class RoutedHarness(BaseAgent):
 
         def refresh(summary=None):
             ledger.fill_context(context)
-            context.metadata = {"policy": self.cfg.policy, **({"summary": summary} if summary else {})}
+            context.metadata = {**(context.metadata or {}), "policy": self.cfg.policy,
+                                **({"summary": summary} if summary else {})}
 
         orch.on_progress = refresh
         try:

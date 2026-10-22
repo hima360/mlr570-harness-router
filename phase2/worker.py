@@ -24,7 +24,7 @@ Do only your step. Other agents may work on other files at the same time, so onl
 your step needs{{writes_hint}}.
 
 Every response must contain exactly one bash command. Each command runs in a fresh shell in the
-task container, so prefix with `cd /path && ...` when needed.
+task container, so prefix with `cd /path && ...` when needed.{{format_hint}}
 When your step is done, run exactly:
 printf '""" + SUBMIT + """\\n<one or two sentences on what you did and which files changed>\\n'
 """
@@ -73,10 +73,22 @@ class HarborEnvAdapter:
         return {"info": {"config": {"environment_type": "phase2.worker.HarborEnvAdapter"}}}
 
 
+TEXT_FORMAT_HINT = """
+Write a short THOUGHT, then put the command in a block exactly like this:
+
+```mswea_bash_command
+your_command_here
+```"""
+
+
 def _make_model(cfg, ledger, model_id: str):
     from minisweagent.models.litellm_model import LitellmModel
 
+    from . import droid
     from .llm import litellm_name
+
+    if droid.is_droid(model_id):
+        return droid.make_text_model(model_id, lambda u: ledger.add_from_usage(model_id, u))
 
     class LedgerModel(LitellmModel):
         def query(self, messages, **kwargs):
@@ -94,9 +106,14 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
                model=None, output_path=None) -> WorkerResult:
     """Blocking: call inside asyncio.to_thread. `model` is injectable for tests."""
     from minisweagent.agents.default import DefaultAgent
+    from minisweagent.models.litellm_textbased_model import LitellmTextbasedModel
+
+    from . import droid
 
     model = model or _make_model(cfg, ledger, model_id)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
+    text_based = isinstance(model, LitellmTextbasedModel) or droid.is_droid(model_id)
+    format_hint = TEXT_FORMAT_HINT if text_based else ""
     agent = DefaultAgent(
         model, env_adapter,
         system_template="You are a careful software engineer operating a Linux shell.",
@@ -105,7 +122,8 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     )
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,
-                         blackboard=blackboard_text, writes_hint=writes_hint) or {}
+                         blackboard=blackboard_text, writes_hint=writes_hint,
+                         format_hint=format_hint) or {}
     except Exception as e:
         return WorkerResult(type(e).__name__, str(e)[:500], agent.n_calls)
     return WorkerResult(info.get("exit_status", "unknown"), (info.get("submission") or "").strip(),

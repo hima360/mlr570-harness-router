@@ -6,6 +6,7 @@ defers to Arch-Router (likelihood over three route names). Both load lazily on f
 """
 import hashlib
 import json
+import math
 import time
 from dataclasses import asdict, dataclass
 
@@ -101,7 +102,10 @@ class Router:
         self.max_tier = cfg.max_route_tier
 
     def _clip(self, score: float) -> int:
-        return int(min(max(round(score), 0), self.max_tier))
+        """Map a difficulty score on Laya/Arch's 0..2 scale onto the routable tiers 0..max_tier."""
+        # Round half up: Python's round() is banker's rounding, which would send 0.5 down but 1.5 up.
+        scaled = math.floor(score / 2 * self.max_tier + 0.5)
+        return int(min(max(scaled, 0), self.max_tier))
 
     def route(self, step_id: str, text: str) -> RouteDecision:
         p = self.cfg.policy

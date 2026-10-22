@@ -40,6 +40,14 @@ class HarnessConfig:
     worker_command_timeout: int = 180
     check_timeout: int = 300
     random_seed: int = 570
+    # `droid/` models are billed in Factory Standard Credits: cost_usd = factory_credits x usd.
+    # usd None = no USD rate known, so droid calls add 0 to cost_usd and credits are reported alone.
+    factory_credit: dict = field(default_factory=lambda: {"usd": None, "source": "", "checked": ""})
+
+    @property
+    def credits_usd(self) -> float | None:
+        usd = (self.factory_credit or {}).get("usd")
+        return None if usd is None else float(usd)
 
     @property
     def max_route_tier(self) -> int:
@@ -59,7 +67,10 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
     cfg = HarnessConfig(**data)
     if isinstance(cfg.confidence_threshold, str):
         cfg.confidence_threshold = float(cfg.confidence_threshold)
-    missing = [m for m in cfg.tiers + [cfg.planner_model] if m not in cfg.prices_per_million]
+    from .droid import is_droid
+
+    missing = [m for m in cfg.tiers + [cfg.planner_model]
+               if not is_droid(m) and m not in cfg.prices_per_million]
     if missing:
         raise ValueError(f"no price for models: {missing}")
     return cfg
