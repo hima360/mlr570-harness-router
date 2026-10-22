@@ -82,3 +82,22 @@ PYTHONPATH=$PWD .venv/bin/harbor run -p tests/harbor_smoke/hello-file -a phase2.
 
 Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence threshold), `laya`, `arch`,
 `random`, `fixed:<tier>` (`fixed:3` = always Opus, `fixed:0` = always cheapest).
+
+### TUI (start, watch, browse and stop runs)
+
+```bash
+.venv/bin/python -m phase2.tui
+```
+
+- Sidebar: `+ New run` and every job in `jobs/` (● running, ✓ passed, ✗ failed, ! error, ■ stopped).
+- Main pane: the roles box shows who actually did each job in that run (planner model, router that decided,
+  worker models with calls, time, tokens and credits or list-price cost, verifier results, tier table).
+  Tabs: **Who did what** (one line per planner/router/worker/verifier action), **Steps**, **Worker turns**
+  (the model's text and each command's output), **Harbor log**.
+- Keys: `n` new run (task, backend config, policy, caps, job name; shows the exact `harbor run` command),
+  `s` stop the selected running job (kills its process group, removes its container and network),
+  `r` refresh, `q` quit. Runs start under `caffeinate -i` and keep going if the TUI is closed.
+- Everything comes from the run's own `trace.jsonl`, worker trajectories and Harbor `result.json`.
+  Keep the lid open: a sleeping Mac pauses the run and drops the model connections.
+- `droid/` models use the Factory app's bundled `droid` (`/Applications/Factory.app/Contents/Resources/bin/droid`)
+  unless `PHASE2_DROID_BIN` is set; an older `droid` on PATH can reject current model ids.
