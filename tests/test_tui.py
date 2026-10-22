@@ -137,8 +137,10 @@ def test_tui_shows_job_and_starts_a_run(tmp_path):
         async with app.run_test(size=(160, 50)) as pilot:
             await pilot.pause()
             assert len(app.query_one("#jobs").children) == 1
-            story = "\n".join(strip.text for strip in app.query_one("#story").lines)
-            assert "PLANNER GPT-6 Sol (via Droid)" in story and "VERIFIER" in story and "passed" in story
+            tree = app.query_one("#overview")
+            top = [n.label.plain for n in tree.root.children]
+            assert top[0].startswith("Planner: GPT-6 Sol") and top[1] == "✔ make hello.txt"
+            assert any("Router: Laya" in n.label.plain for n in tree.root.children[1].children)
             assert "Laya (laya_mlx" in app.query_one("#roles").render().plain
             await pilot.press("n")
             await pilot.pause()
@@ -169,3 +171,28 @@ def test_story_reads_like_a_log_of_who_did_what():
     assert "ROUTER Laya  judged it easy (0.40 of 2, 30% sure) → sent it to GLM 5.3 Flash (via Droid)" in story
     assert "1. listed files" in story and "thinking: look first" in story and "$ ls /app" in story
     assert "→ ok · 1 lines · a.txt" in story and "VERIFIER task container  ran `test -f x` → passed ✔" in story
+
+
+def test_overview_tree_is_plain_words():
+    from phase2.tui import first_sentence, overview
+
+    assert first_sentence("Logs have odd names (e.g. abc.cc). Next I group them.") == "Logs have odd names (e.g. abc.cc)"
+    workers = {"worker_s1_a1": [{"role": "system", "content": "s"}, {"role": "user", "content": "task"},
+                                {"role": "assistant", "content": "THOUGHT: Look first. Then act.\n```mswea_bash_command\nls /app\n```"},
+                                {"role": "user", "content": "<returncode>0</returncode>\n<output>\na.txt\n</output>"},
+                                {"role": "assistant", "content": "```mswea_bash_command\nfor f in *; do echo $f; done\n```"}]}
+    rows = overview(EVENTS, workers, {"verifier_result": {"rewards": {"reward": 1.0}}})
+
+    def flat(items, depth=0):
+        for _, label, children in items:
+            yield "  " * depth + label.plain
+            yield from flat(children, depth + 1)
+
+    lines = list(flat(rows))
+    assert lines[0] == "Planner: GPT-6 Sol (via Droid) split the task into 1 step"
+    assert lines[1] == "✔ make hello.txt"
+    assert "  Router: Laya rated it easy and gave it to GLM 5.3 Flash (via Droid)" in lines
+    assert "  Worker: GLM 5.3 Flash (via Droid)" in lines
+    assert "    Listed files — Look first" in lines and "    Looped over items  … working" in lines
+    assert "  Check: the step's test passed" in lines
+    assert lines[-1].startswith("Result: task solved ✔")

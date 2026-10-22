@@ -15,7 +15,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (Button, DataTable, Footer, Header, Input, Label, ListItem, ListView, RichLog,
-                             Select, Static, TabbedContent, TabPane)
+                             Select, Static, TabbedContent, TabPane, Tree)
 
 from . import jobs as J
 
@@ -272,6 +272,8 @@ def describe_command(cmd: str) -> str:
         "echo": "wrote output", "printf": "wrote output", "sed": "edited text", "git": f"used git ({target})",
         "curl": "fetched a URL", "wget": "fetched a URL", "make": "ran make", "gcc": "compiled C", "cargo": "ran cargo",
         "npm": "ran npm", "pytest": "ran tests", "jq": "queried JSON",
+        "for": "looped over items", "while": "ran a loop", "bash": "ran a shell script", "sh": "ran a shell script",
+        "test": "checked a condition", "diff": "compared files", "tar": "unpacked an archive", "unzip": "unpacked an archive",
     }
     desc = table.get(verb, f"ran {verb}" if verb else "ran a command")
     if ">" in core and verb in ("echo", "printf", "cat", "python3", "python"):
@@ -412,6 +414,116 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
                         + (f", {done.get('n_escalations')} escalation(s)" if done.get("n_escalations") else "")))
     return out
 
+# ---------- Overview tab: a plain tree of what happened, no numbers ----------
+
+def first_sentence(text: str, n: int = 100) -> str:
+    text = " ".join((text or "").split())
+    if not text:
+        return ""
+    guarded = re.sub(r"\b(e\.g|i\.e|etc|vs)\.", lambda m: m.group(0).replace(".", "\0"), text)
+    cut = re.split(r"(?<=[.!?])\s", guarded, maxsplit=1)[0].rstrip(".").replace("\0", ".")
+    return _short(cut, n)
+
+
+def turn_summary(thought: str, cmd: str, ok: bool | None) -> Text:
+    if cmd and SUBMIT_MARK in cmd:
+        return Text("Said the step is finished", style="bold")
+    action = describe_command(cmd) if cmd else "answered without running anything"
+    action = action[0].upper() + action[1:]
+    t = Text(action, style="bold" if ok is not False else "bold red")
+    why = first_sentence(thought)
+    if why:
+        t.append(f" — {why}", style="")
+    if ok is False:
+        t.append("  (failed)", style="red")
+    elif ok is None:
+        t.append("  … working", style="yellow")
+    return t
+
+
+def overview(events: list[dict], workers: dict[str, list], result: dict | None = None) -> list[tuple]:
+    """Tree rows as (key, label, children); children has the same shape. Pure, for the Tree widget and tests."""
+    cfg = next((e for e in events if e.get("event") == "config"), {})
+    tiers = cfg.get("tiers") or []
+    plan = next((e for e in events if e.get("event") == "plan"), None)
+    rows = []
+    if not plan:
+        who = pretty_model(cfg.get("planner_model", "")) if cfg else "the planner"
+        rows.append(("plan", Text(f"Planner: {who} is reading the task and making a plan …", style="yellow"), []))
+        return rows
+    steps = plan.get("steps", [])
+    planner = pretty_model(plan.get("planner_model") or cfg.get("planner_model", "?"))
+    rows.append(("plan", Text.assemble(("Planner: ", "bold magenta"), (planner, "bold"),
+                                       f" split the task into {len(steps)} step{'s' if len(steps) != 1 else ''}"), []))
+    for s in steps:
+        sid = s["id"]
+        route = next((e for e in events if e.get("event") == "route" and e.get("step") == sid), None)
+        atts = {e.get("attempt"): e for e in events if e.get("event") == "attempt" and e.get("step") == sid}
+        last = atts[max(atts)] if atts else None
+        esc = next((e for e in events if e.get("event") == "escalate" and e.get("step") == sid), None)
+        finished = last and (last.get("passed") or not esc or len(atts) == 2)
+        if last and last.get("passed"):
+            icon, style = "✔", "bold green"
+        elif finished:
+            icon, style = "✘", "bold red"
+        elif route:
+            icon, style = "●", "bold yellow"
+        else:
+            icon, style = "○", "dim"
+        label = Text(f"{icon} ", style=style)
+        label.append(_short(s["goal"], 95), style="bold" if route else "dim")
+        children = []
+        if not route:
+            wait = ", ".join(s.get("depends_on") or [])
+            children.append((f"{sid}/wait", Text(f"Waiting for {wait or 'its turn'}", style="dim"), []))
+            rows.append((sid, label, children))
+            continue
+        router = _router_name(route).split(" (")[0]
+        target = pretty_model(_tier_model(route, events))
+        rated = f" rated it {difficulty(route['score'])}" if route.get("score") is not None else ""
+        children.append((f"{sid}/route", Text.assemble(("Router: ", "bold cyan"), (router, "bold"),
+                                                       f"{rated} and gave it to ", (target, "bold")), []))
+        for n, msgs in _attempt_files(workers, sid):
+            model = pretty_model((atts.get(n) or {}).get("model") or (_tier_model(route, events) if n == 1 else ""))
+            turns = []
+            assistant_idx = [i for i, m in enumerate(msgs) if i >= 2 and m.get("role") == "assistant"]
+            for k, i in enumerate(assistant_idx):
+                thought, cmd = split_reply(str(msgs[i].get("content") or ""))
+                nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+                ok = None if nxt is None else (True if nxt.get("role") == "exit" else summarize_output(str(nxt.get("content") or ""))[0])
+                turns.append((f"{sid}/a{n}/t{k}", turn_summary(thought, cmd, ok), []))
+            head = Text.assemble(("Worker: ", "bold blue"), (model, "bold"),
+                                 " (second try, one tier up)" if n > 1 else "")
+            children.append((f"{sid}/a{n}", head, turns or [(f"{sid}/a{n}/start", Text("Starting …", style="yellow"), [])]))
+            a = atts.get(n)
+            if a:
+                if a.get("check"):
+                    verdict = "passed" if a.get("passed") else "failed"
+                    text = Text.assemble(("Check: ", "bold green"), f"the step's test {verdict}")
+                else:
+                    text = Text.assemble(("Check: ", "bold green"),
+                                         "no test for this step, so the worker's word was accepted"
+                                         if a.get("passed") else "no test, and the worker did not finish")
+                if a.get("exit_status") not in (None, "Submitted"):
+                    text.append(f" (worker stopped early: {a['exit_status']})", style="dim")
+                children.append((f"{sid}/a{n}/check", text, []))
+        if esc:
+            up = pretty_model(tiers[esc["to_tier"]]) if tiers and esc.get("to_tier", 99) < len(tiers) else "the next tier"
+            children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold yellow"),
+                                                         f"the check failed, so the step goes to {up}"), []))
+        rows.append((sid, label, children))
+    done = next((e for e in events if e.get("event") == "done"), None)
+    if result is not None:
+        reward = ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward")
+        if reward is not None:
+            rows.append(("result", Text.assemble(("Result: ", "bold"),
+                                                 ("task solved ✔" if reward == 1 else "task not solved ✘",
+                                                  "bold green" if reward == 1 else "bold red"),
+                                                 " (Terminal-Bench's own tests)"), []))
+    elif done:
+        rows.append(("done", Text("All steps finished; Terminal-Bench is grading the result …", style="yellow"), []))
+    return rows
+
 # ---------- screens ----------
 
 class NewRunScreen(ModalScreen):
@@ -545,6 +657,7 @@ class HarnessTUI(App):
         self.selected: str | None = None
         self._list_sig = None
         self._view_sig = None
+        self._collapsed: set[str] = set()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -555,7 +668,9 @@ class HarnessTUI(App):
             with Vertical(id="main"):
                 yield Static(id="meta")
                 yield Static(id="roles")
-                with TabbedContent(initial="tab-activity"):
+                with TabbedContent(initial="tab-overview"):
+                    with TabPane("Overview", id="tab-overview"):
+                        yield Tree("run", id="overview")
                     with TabPane("Who did what", id="tab-activity"):
                         yield RichLog(id="story", wrap=True)
                     with TabPane("Steps", id="tab-steps"):
@@ -633,6 +748,8 @@ class HarnessTUI(App):
                                                 Text("waiting for the trace (container build, Laya load) ...",
                                                      style="dim"))
         worker_msgs = {w.stem: J.read_worker(w) for w in workers}
+        result = J._read_json(job.trial_dir / "result.json") if job.trial_dir else {}
+        self._fill_overview(job, overview(events, worker_msgs, result or None))
         story = self.query_one("#story", RichLog)
         story.clear()
         for line in story_lines(events, worker_msgs):
@@ -657,6 +774,33 @@ class HarnessTUI(App):
             for line in log.read_text(errors="replace").splitlines()[-200:]:
                 hlog.write(Text(line))
 
+    def _fill_overview(self, job: J.Job, rows: list[tuple]) -> None:
+        tree = self.query_one("#overview", Tree)
+        tree.show_root = True
+        tree.clear()
+        title = Text(f"{job.task.split('/')[-1] or job.name}  ", style="bold")
+        title.append(f"{STATUS_ICON.get(job.status, '')} {job.status}", style=STATUS_STYLE.get(job.status, ""))
+        tree.root.set_label(title)
+
+        def add(parent, items):
+            for key, label, children in items:
+                if children:
+                    node = parent.add(label, data=key, expand=key not in self._collapsed)
+                    add(node, children)
+                else:
+                    parent.add_leaf(label, data=key)
+
+        add(tree.root, rows)
+        tree.root.expand()
+
+    def on_tree_node_collapsed(self, event: Tree.NodeCollapsed) -> None:
+        if event.node.data:
+            self._collapsed.add(event.node.data)
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        if event.node.data:
+            self._collapsed.discard(event.node.data)
+
     # --- events and actions ---
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
@@ -665,6 +809,7 @@ class HarnessTUI(App):
             name = self.jobs[lv.index].name
             if name != self.selected:
                 self.selected = name
+                self._collapsed.clear()
                 self.render_job(force=True)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
