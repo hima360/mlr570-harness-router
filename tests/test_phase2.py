@@ -303,3 +303,20 @@ def test_show_trace_renders(tmp_path):
     asyncio.run(orch.run("task", FakeEnvironment()))
     text = render(tmp_path / "trace.jsonl")
     assert "PLAN (1 steps" in text and "ROUTE s1 -> tier 0 via fixed" in text and "PASS s1" in text
+
+
+def test_show_trace_live_view(tmp_path):
+    from phase2.show_trace import find_agent_dir, render_live
+
+    agent = tmp_path / "job" / "task__abc" / "agent"
+    agent.mkdir(parents=True)
+    trace = Trace(agent / "trace.jsonl")
+    trace.log("route", step="s1", tier=0, source="laya", score=0.4, confidence=0.3, ms=20)
+    (agent / "worker_s1_a1.json").write_text(json.dumps({"messages": [
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "THOUGHT: list files"}, {"role": "user", "content": "a.txt b.txt"}]}))
+    assert find_agent_dir(tmp_path / "job") == agent
+    view = render_live(agent)
+    assert "ROUTE s1 -> tier 0" in view and "s1_a1: 1 model turns" in view and "shell < a.txt b.txt" in view
+    (agent.parent / "result.json").write_text(json.dumps({"verifier_result": {"rewards": {"reward": 1.0}}}))
+    assert "RESULT reward=1.0" in render_live(agent)
