@@ -1,0 +1,24 @@
+{
+  "person": "your-name",
+  "model": "claude-sonnet-5-5",
+  "plan": "plan.tsv",
+  "parallel": 2,
+  "cap_wait_minutes": 30,
+  "max_cap_retries": 24,
+  "task_timeout_minutes": 180,
+  "datasets": {
+    "tb4": "terminal-bench/terminal-bench@4.0.0",
+    "swe": "scale-ai/swe-bench-pro"
+  },
+  "harnesses": {
+    "claude-code": "harbor run -d {dataset} -t {task} -a claude-code -m {model} -o {outdir}",
+    "codex": "harbor run -d {dataset} -t {task} -a codex -m {model} -o {outdir}",
+    "hermes": "FILL IN DURING SMOKE TEST",
+    "zcode": "FILL IN DURING SMOKE TEST"
+  },
+  "prices_per_million": {
+    "claude-sonnet-5-5": {"input_tokens": 2.0, "output_tokens": 10.0, "cached_tokens": 0.10},
+    "gpt-6.1-sol": {"input_tokens": 2.0, "output_tokens": 10.0, "cached_tokens": 0.0},
+    "glm-5.3-flash": {"input_tokens": 0.15, "output_tokens": 0.50, "cached_tokens": 0.0}
+  }
+}

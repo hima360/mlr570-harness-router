@@ -1,0 +1,8 @@
+runs/
+.env
+*.env
+.env.*
+*token*
+*.key
+__pycache__/
+.DS_Store
