@@ -60,11 +60,12 @@ class Orchestrator:
         self.trace.log("route", step=step.id, model=self.cfg.tiers[decision.tier], **decision.to_dict())
         tier = decision.tier
         record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False}
+        handoff = ""
         for attempt in range(2):  # first try + one escalated retry
             model_id = self.cfg.tiers[tier]
             bb.update(step.id, status="running", tier=tier, model=model_id, attempts=attempt + 1)
             out_path = (self.logs_dir / f"worker_{step.id}_a{attempt + 1}.json") if self.logs_dir else None
-            result = await asyncio.to_thread(self.work, step, model_id, bb.summary_for(step.id), out_path)
+            result = await asyncio.to_thread(self.work, step, model_id, bb.summary_for(step.id) + handoff, out_path)
             verdict = await verify(environment, step, result.exit_status, self.cfg.check_timeout)
             self.trace.log("attempt", step=step.id, attempt=attempt + 1, tier=tier, model=model_id,
                            exit_status=result.exit_status, n_calls=result.n_calls, passed=verdict.passed,
@@ -79,8 +80,30 @@ class Orchestrator:
             if attempt == 0 and tier < len(self.cfg.tiers) - 1:
                 record["escalations"] += 1
                 self.trace.log("escalate", step=step.id, from_tier=tier, to_tier=tier + 1, router_error=True)
+                handoff = self._handoff(out_path, model_id, result.exit_status, verdict.output)
+                if handoff:
+                    self.trace.log("handoff", step=step.id, from_model=model_id, to_model=self.cfg.tiers[tier + 1],
+                                   chars=len(handoff))
                 tier += 1
             else:
                 break
         bb.update(step.id, status="done" if record["passed"] else "failed")
         return record
+
+    @staticmethod
+    def _handoff(out_path: Path | None, model_id: str, exit_status: str, check_output: str) -> str:
+        """The failed attempt's findings, so the escalated attempt continues instead of starting over."""
+        import json
+
+        from .worker import attempt_digest
+
+        try:
+            messages = json.loads(out_path.read_text()).get("messages", []) if out_path else []
+        except (OSError, ValueError):
+            messages = []
+        digest = attempt_digest(messages)
+        if not digest:
+            return ""
+        check = f"\nThe step's check said: {check_output.strip()[-600:]}" if check_output.strip() else ""
+        return (f"\n\nA previous attempt at YOUR step by {model_id} did not pass (ended: {exit_status}).{check}\n"
+                f"Build on what it found instead of starting over; verify anything you rely on.\n{digest}")

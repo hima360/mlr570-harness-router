@@ -147,3 +147,32 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
         return WorkerResult(type(e).__name__, str(e)[:500], agent.n_calls)
     return WorkerResult(info.get("exit_status", "unknown"), (info.get("submission") or "").strip(),
                         agent.n_calls)
+
+
+def attempt_digest(messages: list[dict], max_chars: int = 5000) -> str:
+    """What a failed attempt found, for the next attempt: each turn's thought, command and the start of
+    its output, newest turns kept first when it does not all fit."""
+    import re
+
+    turns = []
+    for i, m in enumerate(messages):
+        if i < 2 or m.get("role") != "assistant":
+            continue
+        text = str(m.get("content") or "")
+        cmd = re.search(r"```mswea_bash_command\s*(.*?)```", text, re.S)
+        thought = " ".join((text[: cmd.start()] if cmd else text).replace("THOUGHT:", "").split())[:400]
+        nxt = messages[i + 1] if i + 1 < len(messages) else {}
+        out = " ".join(str(nxt.get("content") or "").split())[:400] if nxt.get("role") != "assistant" else ""
+        part = (f"- thought: {thought}\n" if thought else "") + \
+               (f"  ran: {' '.join(cmd.group(1).split())[:300]}\n" if cmd else "") + \
+               (f"  got: {out}\n" if out else "")
+        if part:
+            turns.append(part)
+    kept, size = [], 0
+    for part in reversed(turns):
+        if size + len(part) > max_chars:
+            kept.append("- (earlier turns omitted)\n")
+            break
+        kept.append(part)
+        size += len(part)
+    return "".join(reversed(kept))

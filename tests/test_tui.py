@@ -196,3 +196,21 @@ def test_overview_tree_is_plain_words():
     assert "    Listed files — Look first" in lines and "    Looped over items  … working" in lines
     assert "  Check: the step's test passed" in lines
     assert lines[-1].startswith("Result: task solved ✔")
+
+
+def test_overview_shows_escalation_between_attempts():
+    from phase2.tui import overview
+
+    ev = EVENTS[:5] + [
+        {"t": 15.0, "event": "attempt", "step": "s1", "attempt": 1, "tier": 0, "model": "droid/glm-5.3-flash",
+         "exit_status": "TimeExceeded", "n_calls": 1, "passed": False, "check": ""},
+        {"t": 15.1, "event": "escalate", "step": "s1", "from_tier": 0, "to_tier": 1},
+        {"t": 15.2, "event": "handoff", "step": "s1", "chars": 900}]
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "t"},
+            {"role": "assistant", "content": "```mswea_bash_command\nls\n```"}]
+    rows = overview(ev, {"worker_s1_a1": msgs, "worker_s1_a2": msgs})
+    kids = [label.plain for _, label, _ in rows[1][2]]
+    assert kids[1] == "Worker: GLM 5.3 Flash (via Droid)"
+    assert kids[3].startswith("Escalated: the first attempt did not pass, so the step goes to DeepSeek V4.1 Flash")
+    assert kids[3].endswith("with the first attempt's notes")
+    assert kids[4] == "Worker: DeepSeek V4.1 Flash (via Droid) (second try, one tier up)"

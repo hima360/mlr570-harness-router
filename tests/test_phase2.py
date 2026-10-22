@@ -320,3 +320,28 @@ def test_show_trace_live_view(tmp_path):
     assert "ROUTE s1 -> tier 0" in view and "s1_a1: 1 model turns" in view and "shell < a.txt b.txt" in view
     (agent.parent / "result.json").write_text(json.dumps({"verifier_result": {"rewards": {"reward": 1.0}}}))
     assert "RESULT reward=1.0" in render_live(agent)
+
+
+def test_escalated_attempt_gets_the_failed_attempts_notes(tmp_path):
+    cfg = load_config(policy="fixed:0")
+    led, trace = Ledger(cfg.prices_per_million), Trace(tmp_path / "trace.jsonl")
+    seen = []
+
+    def work(step, model_id, bb_text, out_path):
+        seen.append(bb_text)
+        if len(seen) == 1:
+            out_path.write_text(json.dumps({"messages": [
+                {"role": "system", "content": "s"}, {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "THOUGHT: the DGA is an LCG\n```mswea_bash_command\npython3 solve.py\n```"},
+                {"role": "user", "content": "<returncode>0</returncode><output>a=0x7a3c9e1d</output>"}]}))
+            return WorkerResult("TimeExceeded", "", 14)
+        return WorkerResult("Submitted", "done", 2)
+
+    orch = Orchestrator(cfg, led, trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "")), work, tmp_path)
+    summary = asyncio.run(orch.run("task", FakeEnvironment()))
+    assert summary["steps"]["s1"]["passed"] and summary["steps"]["s1"]["escalations"] == 1
+    assert "previous attempt" not in seen[0]
+    assert "A previous attempt at YOUR step by zai/glm-5.3-flash did not pass (ended: TimeExceeded)" in seen[1]
+    assert "the DGA is an LCG" in seen[1] and "python3 solve.py" in seen[1] and "a=0x7a3c9e1d" in seen[1]
+    assert any(e["event"] == "handoff" for e in trace.events)

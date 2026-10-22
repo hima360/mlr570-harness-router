@@ -363,8 +363,13 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
         calls = [e for e in events if e.get("event") == "llm_call" and e.get("role") == "worker" and e.get("step") == sid]
         call_i = 0
         attempts = {e.get("attempt"): e for e in events if e.get("event") == "attempt" and e.get("step") == sid}
+        esc = next((e for e in events if e.get("event") == "escalate" and e.get("step") == sid), None)
+        esc_model = tiers[esc["to_tier"]] if esc and tiers and esc.get("to_tier", 99) < len(tiers) else ""
         for n, msgs in _attempt_files(workers, sid):
-            amodel = attempts.get(n, {}).get("model") or (model if n == 1 else "")
+            if n > 1 and esc:
+                out.append(head("ESCALATE", "orchestrator", f"first attempt did not pass, retrying one tier up on "
+                                f"{pretty_model(esc_model) if esc_model else 'the next tier'}"))
+            amodel = attempts.get(n, {}).get("model") or (model if n == 1 else esc_model)
             out.append(head("WORKER", pretty_model(amodel) if amodel else "worker",
                             f"attempt {n}, tool: bash in the task container"))
             turn = 0
@@ -401,10 +406,8 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
                 if a.get("exit_status") not in (None, "Submitted"):
                     v.append(f"  (worker stopped: {a['exit_status']})", style="dim")
                 out.append(v)
-        esc = next((e for e in events if e.get("event") == "escalate" and e.get("step") == sid), None)
-        if esc:
-            to = tiers[esc["to_tier"]] if tiers and esc.get("to_tier", 99) < len(tiers) else f"tier {esc.get('to_tier')}"
-            out.append(head("ESCALATE", "orchestrator", f"check failed, retrying one tier up on {pretty_model(to)}"))
+        if esc and not _attempt_files(workers, sid)[1:]:
+            out.append(head("ESCALATE", "orchestrator", f"retrying one tier up on {pretty_model(esc_model) or 'the next tier'}"))
         out.append(Text(""))
     done = next((e for e in events if e.get("event") == "done"), None)
     if done:
@@ -483,8 +486,16 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         rated = f" rated it {difficulty(route['score'])}" if route.get("score") is not None else ""
         children.append((f"{sid}/route", Text.assemble(("Router: ", "bold cyan"), (router, "bold"),
                                                        f"{rated} and gave it to ", (target, "bold")), []))
+        esc_model = tiers[esc["to_tier"]] if esc and tiers and esc.get("to_tier", 99) < len(tiers) else ""
+        handoff = next((e for e in events if e.get("event") == "handoff" and e.get("step") == sid), None)
         for n, msgs in _attempt_files(workers, sid):
-            model = pretty_model((atts.get(n) or {}).get("model") or (_tier_model(route, events) if n == 1 else ""))
+            if n > 1 and esc:
+                children.append((f"{sid}/esc", Text.assemble(
+                    ("Escalated: ", "bold yellow"), f"the first attempt did not pass, so the step goes to ",
+                    (pretty_model(esc_model) if esc_model else "the next tier", "bold"),
+                    " with the first attempt's notes" if handoff else " (starting over)"), []))
+            model = pretty_model((atts.get(n) or {}).get("model") or
+                                 (_tier_model(route, events) if n == 1 else esc_model) or "?")
             turns = []
             assistant_idx = [i for i, m in enumerate(msgs) if i >= 2 and m.get("role") == "assistant"]
             for k, i in enumerate(assistant_idx):
@@ -507,10 +518,9 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                 if a.get("exit_status") not in (None, "Submitted"):
                     text.append(f" (worker stopped early: {a['exit_status']})", style="dim")
                 children.append((f"{sid}/a{n}/check", text, []))
-        if esc:
-            up = pretty_model(tiers[esc["to_tier"]]) if tiers and esc.get("to_tier", 99) < len(tiers) else "the next tier"
-            children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold yellow"),
-                                                         f"the check failed, so the step goes to {up}"), []))
+        if esc and not any(k == f"{sid}/esc" for k, _, _ in children):
+            children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold yellow"), "to ",
+                                                         (pretty_model(esc_model) or "the next tier", "bold")), []))
         rows.append((sid, label, children))
     done = next((e for e in events if e.get("event") == "done"), None)
     if result is not None:
