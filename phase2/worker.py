@@ -84,11 +84,11 @@ your_command_here
 def _make_model(cfg, ledger, model_id: str):
     from minisweagent.models.litellm_model import LitellmModel
 
-    from . import droid
+    from .cli_models import complete_fn_for, make_text_model
     from .llm import litellm_name
 
-    if droid.is_droid(model_id):
-        return droid.make_text_model(model_id, lambda u: ledger.add_from_usage(model_id, u))
+    if complete_fn_for(model_id) is not None:
+        return make_text_model(model_id, lambda u: ledger.add_from_usage(model_id, u))
 
     class LedgerModel(LitellmModel):
         def query(self, messages, **kwargs):
@@ -108,11 +108,11 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     from minisweagent.agents.default import DefaultAgent
     from minisweagent.models.litellm_textbased_model import LitellmTextbasedModel
 
-    from . import droid
+    from .cli_models import complete_fn_for
 
     model = model or _make_model(cfg, ledger, model_id)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
-    text_based = isinstance(model, LitellmTextbasedModel) or droid.is_droid(model_id)
+    text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""
     agent = DefaultAgent(
         model, env_adapter,

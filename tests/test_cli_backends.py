@@ -1,4 +1,4 @@
-"""Droid backend, credit pricing and tier scaling. Fake `droid exec`: no network, no credits."""
+"""CLI model backends (Droid, Claude Code), credit pricing and tier scaling. Fake CLIs: no network."""
 import asyncio
 import json
 import os
@@ -91,7 +91,10 @@ def test_router_scales_score_onto_tiers(n_tiers, score, tier):
     assert Router(cfg, laya=FakeScorer((score, 1.0)), arch=None).route("s", "x").tier == tier
 
 
-def test_worker_with_droid_text_model():
+@pytest.mark.parametrize("model_id", ["droid/glm-5.3-flash", "claude/claude-haiku-5-5"])
+def test_worker_with_cli_text_model(model_id):
+    from phase2.cli_models import make_text_model
+
     env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nwrote hello.txt\n", 0) if SUBMIT in cmd else ("ok", 0))
     replies = iter([
         "THOUGHT: write it\n\n```mswea_bash_command\necho hello > /app/hello.txt\n```",
@@ -104,9 +107,8 @@ def test_worker_with_droid_text_model():
         return next(replies), {"prompt_tokens": 7000, "completion_tokens": 20,
                                "prompt_tokens_details": {"cached_tokens": 0}, "factory_credits": 420}
 
-    led = Ledger({}, credits_usd=None)
-    model_id = "droid/glm-5.3-flash"
-    model = droid.make_text_model(model_id, lambda u: led.add_from_usage(model_id, u), complete_fn=fake_complete)
+    led = Ledger(load_config(ROOT / "configs/phase2-claude-code.json").prices_per_million, credits_usd=None)
+    model = make_text_model(model_id, lambda u: led.add_from_usage(model_id, u), complete_fn=fake_complete)
 
     async def main():
         adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
@@ -119,3 +121,56 @@ def test_worker_with_droid_text_model():
     assert env.commands[0] == "echo hello > /app/hello.txt"
     assert "mswea_bash_command" in prompts[0][-1]["content"]
     assert led.by_model[model_id].factory_credits == 840 and led.totals().calls == 2
+
+
+# ---------- Claude Code backend (fake `claude -p`, no subscription usage) ----------
+
+def test_cli_backend_dispatch():
+    from phase2 import claude_code
+    from phase2.cli_models import complete_fn_for
+
+    assert complete_fn_for("droid/glm-5.3-flash") is droid.complete
+    assert complete_fn_for("claude/claude-haiku-5-5") is claude_code.complete
+    assert complete_fn_for("anthropic/claude-opus-5-5") is None  # opencodex id
+
+
+def test_claude_code_complete_uses_fake_run(monkeypatch):
+    from phase2 import claude_code
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-leak")
+    seen = {}
+
+    def fake_run(argv, input, cwd, env, capture_output, text, timeout):
+        seen.update(argv=argv, input=input, env=env)
+        out = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done",
+                          "total_cost_usd": 0.0123,
+                          "usage": {"input_tokens": 20, "cache_creation_input_tokens": 100,
+                                    "cache_read_input_tokens": 300, "output_tokens": 9}})
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    text, usage = claude_code.complete("claude/claude-haiku-5-5",
+                                       [{"role": "system", "content": "be a shell agent"},
+                                        {"role": "user", "content": "list files"}], run=fake_run)
+    argv = seen["argv"]
+    assert text == "done" and argv[:4] == ["claude", "-p", "--model", "claude-haiku-5-5"]
+    assert argv[argv.index("--tools") + 1] == "" and "--safe-mode" in argv
+    assert "be a shell agent" in argv[argv.index("--system-prompt") + 1]
+    assert "### USER\nlist files" in seen["input"] and "be a shell agent" not in seen["input"]
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
+    assert usage["prompt_tokens"] == 420 and usage["prompt_tokens_details"]["cached_tokens"] == 300
+    assert usage["completion_tokens"] == 9 and usage["claude_code_cost_usd"] == 0.0123
+
+
+def test_claude_code_config_and_list_price_cost():
+    from harbor.models.agent.context import AgentContext
+
+    cfg = load_config(ROOT / "configs/phase2-claude-code.json")
+    assert cfg.planner_model == cfg.tiers[-1] == "claude/claude-opus-5-5" and cfg.max_route_tier == 1
+    led = Ledger(cfg.prices_per_million)
+    c = led.add_from_usage("claude/claude-sonnet-5-5", {"prompt_tokens": 1_000_000, "completion_tokens": 100_000,
+                                                        "prompt_tokens_details": {"cached_tokens": 500_000},
+                                                        "claude_code_cost_usd": 3.5})
+    assert c == pytest.approx(0.5 * 2 + 0.5 * 0.10 + 0.1 * 10)
+    ctx = AgentContext()
+    led.fill_context(ctx)
+    assert ctx.metadata == {"claude_code_cost_usd": {"claude/claude-sonnet-5-5": 3.5}}

@@ -18,6 +18,7 @@ class Usage:
     cost_usd: float = 0.0
     calls: int = 0
     factory_credits: float = 0.0
+    claude_code_cost_usd: float = 0.0  # Claude Code's own estimate, reference only (not the bill)
 
 
 class Ledger:
@@ -36,7 +37,7 @@ class Ledger:
         return (uncached * p["input"] + cached_tokens * p["cached"] + output_tokens * p["output"]) / 1e6
 
     def add(self, model: str, input_tokens: int, cached_tokens: int = 0, output_tokens: int = 0,
-            factory_credits: float | None = None) -> float:
+            factory_credits: float | None = None, claude_code_cost_usd: float | None = None) -> float:
         c = self.cost(model, input_tokens, cached_tokens, output_tokens, factory_credits)
         with self._lock:
             u = self.by_model.setdefault(model, Usage())
@@ -46,6 +47,7 @@ class Ledger:
             u.cost_usd += c
             u.calls += 1
             u.factory_credits += float(factory_credits or 0)
+            u.claude_code_cost_usd += float(claude_code_cost_usd or 0)
         return c
 
     def add_from_usage(self, model: str, usage) -> float:
@@ -56,7 +58,8 @@ class Ledger:
         cached = (details.get("cached_tokens") if isinstance(details, dict)
                   else getattr(details, "cached_tokens", 0)) or 0
         return self.add(model, int(get("prompt_tokens", 0) or 0), int(cached),
-                        int(get("completion_tokens", 0) or 0), get("factory_credits"))
+                        int(get("completion_tokens", 0) or 0), get("factory_credits"),
+                        get("claude_code_cost_usd"))
 
     def totals(self) -> Usage:
         t = Usage()
@@ -89,5 +92,9 @@ class Ledger:
                           n_output_tokens=u.output_tokens, cost_usd=round(u.cost_usd, 6))
             for m, u in self.by_model.items()
         }
-        if any(is_droid(m) for m in self.by_model):
-            context.metadata = {**(context.metadata or {}), **self.credits_report()}
+        extra = self.credits_report() if any(is_droid(m) for m in self.by_model) else {}
+        reported = {m: round(u.claude_code_cost_usd, 6) for m, u in self.by_model.items() if u.claude_code_cost_usd}
+        if reported:
+            extra["claude_code_cost_usd"] = reported
+        if extra:
+            context.metadata = {**(context.metadata or {}), **extra}
