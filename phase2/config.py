@@ -66,8 +66,11 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
     if unknown:
         raise ValueError(f"unknown config keys: {sorted(unknown)}")
     cfg = HarnessConfig(**data)
-    if isinstance(cfg.confidence_threshold, str):
-        cfg.confidence_threshold = float(cfg.confidence_threshold)
+    # Harbor --ak values may arrive as strings.
+    for name, f in known.items():
+        value = getattr(cfg, name)
+        if f.type in (int, float, "int", "float") and isinstance(value, str):
+            setattr(cfg, name, (int if f.type in (int, "int") else float)(value))
     from .droid import is_droid
 
     missing = [m for m in cfg.tiers + [cfg.planner_model]

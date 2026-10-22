@@ -21,7 +21,8 @@ from .router import Router
 from .trace import Trace
 from .worker import HarborEnvAdapter, run_worker
 
-CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "max_parallel")
+CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "max_parallel",
+               "max_plan_steps", "worker_step_limit")
 
 
 class RoutedHarness(BaseAgent):

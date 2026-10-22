@@ -244,6 +244,10 @@ def test_agent_class_loads_and_reads_overrides(tmp_path):
 
     a = RoutedHarness(logs_dir=tmp_path, model_name=None, policy="fixed:3")
     assert a.name() == "routed-harness" and a.cfg.policy == "fixed:3"
+    capped = RoutedHarness(logs_dir=tmp_path, model_name=None, max_plan_steps="5", worker_step_limit="25",
+                           confidence_threshold="0.3")
+    assert (capped.cfg.max_plan_steps, capped.cfg.worker_step_limit) == (5, 25)
+    assert capped.cfg.confidence_threshold == 0.3
 
 
 # ---------- replay, head training, trace view ----------
