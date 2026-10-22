@@ -40,6 +40,7 @@ def test_droid_complete_uses_fake_run():
                                                          {"role": "user", "content": "say hi"}], run=fake_run)
     assert text == "hi there"
     assert seen["argv"][:6] == ["droid", "exec", "-m", "glm-5.3-flash", "-o", "json"]
+    assert seen["argv"][seen["argv"].index("--only-tools") + 1] == "TodoWrite"
     assert "### SYSTEM\nbe brief" in seen["prompt"] and seen["prompt"].endswith("### ASSISTANT\n")
     assert usage["prompt_tokens"] == 45 and usage["prompt_tokens_details"]["cached_tokens"] == 30
     assert usage["completion_tokens"] == 7 and usage["factory_credits"] == 465

@@ -24,7 +24,10 @@ def complete(model: str, messages: list[dict], timeout: int = 600, run=subproces
     with tempfile.TemporaryDirectory() as d:
         prompt = Path(d) / "prompt.txt"
         prompt.write_text(serialize(messages))
-        p = run(["droid", "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills", "-f", str(prompt)],
+        # Only TodoWrite (no side effects) stays allowed: otherwise Droid's read-only Execute, Read,
+        # Grep, WebSearch and FetchUrl run on the host, outside the harness and the task container.
+        p = run(["droid", "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
+                 "--only-tools", "TodoWrite", "-f", str(prompt)],
                 cwd=d, capture_output=True, text=True, timeout=timeout)
     result = parse_result(p, "droid exec")
     u = result.get("usage") or {}
