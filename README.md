@@ -61,3 +61,24 @@ output_tokens, cached_tokens, tool_calls, cost_usd, runner_commit, outdir`
 
 Paste this README and `RULES.md` into Claude or Codex and ask it to do the smoke test for your
 harnesses. Tell it explicitly not to edit `plan.tsv`, the prices or the log fields.
+
+## Phase 2 harness (`phase2/`)
+
+Design: `docs/PHASE2_PLAN.md`. Setup and checks:
+
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv -r requirements-phase2.txt
+.venv/bin/python -m pytest tests -q
+```
+
+Harbor smoke test with a scripted model server (no subscription needed; needs Docker with `docker compose`):
+
+```bash
+.venv/bin/python tests/harbor_smoke/stub_llm_server.py 18999 &
+PYTHONPATH=$PWD .venv/bin/harbor run -p tests/harbor_smoke/hello-file -a phase2.agent:RoutedHarness \
+  --ak base_url=http://127.0.0.1:18999/v1 --ak policy=fixed:0 -n 1 -o jobs --job-name smoke
+.venv/bin/python -m phase2.show_trace jobs/smoke/*/agent
+```
+
+Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence threshold), `laya`, `arch`,
+`random`, `fixed:<tier>` (`fixed:3` = always Opus, `fixed:0` = always cheapest).
