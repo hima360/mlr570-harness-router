@@ -92,7 +92,7 @@ def test_router_scales_score_onto_tiers(n_tiers, score, tier):
 
 
 @pytest.mark.parametrize("model_id", ["droid/glm-5.3-flash", "claude/claude-haiku-5-5"])
-def test_worker_with_cli_text_model(model_id):
+def test_worker_with_cli_text_model(model_id, capfd):
     from phase2.cli_models import make_text_model
 
     env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nwrote hello.txt\n", 0) if SUBMIT in cmd else ("ok", 0))
@@ -121,6 +121,7 @@ def test_worker_with_cli_text_model(model_id):
     assert env.commands[0] == "echo hello > /app/hello.txt"
     assert "mswea_bash_command" in prompts[0][-1]["content"]
     assert led.by_model[model_id].factory_credits == 840 and led.totals().calls == 2
+    assert "Provider List" not in "".join(capfd.readouterr())  # no litellm pricing lookups for CLI ids
 
 
 # ---------- Claude Code backend (fake `claude -p`, no subscription usage) ----------

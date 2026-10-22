@@ -73,4 +73,9 @@ def make_text_model(model: str, on_usage, complete_fn=None):
                 usage={k: usage[k] for k in ("prompt_tokens", "completion_tokens")},
             )
 
+        def _calculate_cost(self, response):
+            # The Ledger prices CLI calls; litellm cannot resolve droid/ or claude/ ids and
+            # prints a "Provider List" error on every lookup.
+            return {"cost": 0.0}
+
     return CliTextModel(model_name=model, cost_tracking="ignore_errors")
