@@ -215,6 +215,203 @@ def worker_lines(messages: list[dict], max_obs: int = 1500) -> list[Text]:
     return out
 
 
+# ---------- plain-language story (the default "Who did what" view) ----------
+
+PRETTY = {"gpt": "GPT", "glm": "GLM", "deepseek": "DeepSeek", "kimi": "Kimi", "claude": "Claude",
+          "sol": "Sol", "flash": "Flash", "haiku": "Haiku", "sonnet": "Sonnet", "opus": "Opus"}
+BACKEND = {"droid": "via Droid", "claude": "via Claude Code"}
+SUBMIT_MARK = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+OBS_RE = re.compile(r"<returncode>(-?\d+)</returncode>\s*(?:<output>\s*(.*?)\s*(?:</output>|$))?", re.S)
+
+
+def pretty_model(model_id: str) -> str:
+    """droid/deepseek-v4.1-flash -> 'DeepSeek V4.1 Flash (via Droid)'."""
+    backend, _, name = model_id.partition("/") if "/" in model_id else ("", "", model_id)
+    name = name.removeprefix("claude-") if backend == "claude" else name
+    words = []
+    for w in re.split(r"[-_]", name):
+        if re.fullmatch(r"v?\d+(\.\d+)*", w):
+            words.append(w.upper() if w.startswith("v") else w)
+        else:
+            words.append(PRETTY.get(w, w.capitalize()))
+    text = " ".join(words)
+    text = re.sub(r"(\d) (\d)", r"\1.\2", text)  # claude-opus-5-5 -> Opus 5.5
+    text = re.sub(r"\bGPT (\d)", r"GPT-\1", text)
+    if backend == "claude":
+        text = "Claude " + text
+    return f"{text} ({BACKEND.get(backend, backend)})" if backend else text
+
+
+def difficulty(score) -> str:
+    if score is None:
+        return ""
+    return "easy" if score < 0.67 else "medium" if score < 1.33 else "hard"
+
+
+def describe_command(cmd: str) -> str:
+    """A few words on what a shell command does, for people skimming the run."""
+    if SUBMIT_MARK in cmd:
+        return "declared the step done"
+    parts = [p.strip() for p in cmd.strip().split("&&")]
+    core = next((p for p in parts if not p.startswith("cd ")), parts[-1])  # first real action after any cd
+    first = core.split("|")[0].strip()
+    tok = first.split()
+    verb = tok[0] if tok else ""
+    args = [t for t in tok[1:] if not t.startswith("-")]
+    target = " ".join(args[:3])
+    table = {
+        "ls": "listed files", "tree": "listed files", "find": "searched for files",
+        "cat": f"read {target}", "head": f"read the start of {target}", "tail": f"read the end of {target}",
+        "less": f"read {target}", "wc": f"counted lines in {target}", "grep": "searched text", "rg": "searched text",
+        "awk": f"extracted columns from {args[-1] if args else 'data'}", "sort": "sorted data", "uniq": "counted repeats",
+        "xxd": f"hex-dumped {target}", "od": f"hex-dumped {args[-1] if args else ''}", "hexdump": f"hex-dumped {target}",
+        "file": f"checked file types of {target}", "strings": f"pulled text out of {target}",
+        "python3": "ran a Python script", "python": "ran a Python script", "node": "ran a JS script",
+        "pip": "installed Python packages", "pip3": "installed Python packages", "apt-get": "installed system packages",
+        "mkdir": "made a folder", "cp": "copied files", "mv": "moved files", "rm": "deleted files",
+        "echo": "wrote output", "printf": "wrote output", "sed": "edited text", "git": f"used git ({target})",
+        "curl": "fetched a URL", "wget": "fetched a URL", "make": "ran make", "gcc": "compiled C", "cargo": "ran cargo",
+        "npm": "ran npm", "pytest": "ran tests", "jq": "queried JSON",
+    }
+    desc = table.get(verb, f"ran {verb}" if verb else "ran a command")
+    if ">" in core and verb in ("echo", "printf", "cat", "python3", "python"):
+        dest = core.rsplit(">", 1)[-1].strip().split()[0] if core.rsplit(">", 1)[-1].strip() else ""
+        desc = f"wrote {dest}" if dest else desc
+    return desc
+
+
+def split_reply(text: str) -> tuple[str, str]:
+    """(what the model says it is doing, the shell command) from one worker reply."""
+    m = CMD_RE.search(text or "")
+    cmd = m.group(1).strip() if m else ""
+    thought = (text or "")[: m.start()] if m else (text or "")
+    thought = " ".join(thought.replace("THOUGHT:", "").split())
+    return thought, cmd
+
+
+def summarize_output(obs: str) -> tuple[bool, str]:
+    m = OBS_RE.search(obs or "")
+    if not m:
+        return True, _short(obs, 110)
+    code, body = int(m.group(1)), (m.group(2) or "")
+    lines = [l for l in body.splitlines() if l.strip() and not re.match(r"total \d+$", l.strip())]
+    first = _short(lines[0], 100) if lines else "(no output)"
+    trimmed = " · long output, trimmed" if "characters elided" in body else ""
+    head = f"ok · {len(lines)} lines{trimmed}" if code == 0 else f"failed (exit {code})"
+    return code == 0, f"{head} · {first}"
+
+
+def _attempt_files(workers: dict, step: str) -> list[tuple[int, list]]:
+    return sorted(((int(k.rsplit("_a", 1)[1]), v) for k, v in workers.items()
+                   if k.startswith(f"worker_{step}_a")), key=lambda kv: kv[0])
+
+
+def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
+    """What each agent did, in words, grouped by step. `workers` maps 'worker_s1_a1' -> messages."""
+    out: list[Text] = []
+    cfg = next((e for e in events if e.get("event") == "config"), {})
+    tiers = cfg.get("tiers") or []
+    plan = next((e for e in events if e.get("event") == "plan"), None)
+    pcalls = [e for e in events if e.get("event") == "llm_call" and e.get("role") == "planner"]
+
+    def head(role: str, who: str, extra: str = "") -> Text:
+        t = Text(f"{role} ", style=ROLE_STYLE.get(role, "bold"))
+        t.append(who, style="bold")
+        if extra:
+            t.append(f"  {extra}", style="dim")
+        return t
+
+    if plan:
+        who = pretty_model(plan.get("planner_model") or cfg.get("planner_model", "planner"))
+        took = f"{sum(c.get('ms', 0) for c in pcalls) / 1000:.0f}s" if pcalls else ""
+        out.append(head("PLANNER", who, took))
+        steps = plan.get("steps", [])
+        lead = "Could not plan, so it treats the whole task as one step:" if plan.get("fallback") else \
+            f"Split the task into {len(steps)} step{'s' if len(steps) != 1 else ''}:"
+        out.append(Text(f"  {lead}"))
+        for s in steps:
+            after = f" (after {', '.join(s['depends_on'])})" if s.get("depends_on") else ""
+            out.append(Text(f"    {s['id']}{after}: {_short(s['goal'], 150)}"))
+            out.append(Text(f"        done when: {_short(s['check'], 90) if s.get('check') else 'the worker says it is done'}",
+                            style="dim"))
+        out.append(Text(""))
+    elif cfg:
+        out.append(head("PLANNER", pretty_model(cfg.get("planner_model", "?")), "planning ..."))
+
+    for s in (plan or {}).get("steps", []):
+        sid = s["id"]
+        route = next((e for e in events if e.get("event") == "route" and e.get("step") == sid), None)
+        if not route:
+            out.append(Text(f"STEP {sid}  waiting for: {', '.join(s.get('depends_on') or []) or 'its turn'}",
+                            style="dim"))
+            continue
+        out.append(Text(f"STEP {sid}  {_short(s['goal'], 120)}", style="bold underline"))
+        model = _tier_model(route, events)
+        router = _router_name(route).split(" (")[0]
+        if route.get("score") is not None:
+            sure = f", {route['confidence'] * 100:.0f}% sure" if route.get("confidence") is not None else ""
+            judged = f"judged it {difficulty(route['score'])} ({route['score']:.2f} of 2{sure})"
+        else:
+            judged = f"used {_router_name(route)}"
+        t = head("ROUTER", router)
+        t.append(f"  {judged} → sent it to ")
+        t.append(pretty_model(model), style="bold")
+        t.append(f" (tier {route.get('tier')} of {len(tiers) - 1})" if tiers else "", style="dim")
+        out.append(t)
+        calls = [e for e in events if e.get("event") == "llm_call" and e.get("role") == "worker" and e.get("step") == sid]
+        call_i = 0
+        attempts = {e.get("attempt"): e for e in events if e.get("event") == "attempt" and e.get("step") == sid}
+        for n, msgs in _attempt_files(workers, sid):
+            amodel = attempts.get(n, {}).get("model") or (model if n == 1 else "")
+            out.append(head("WORKER", pretty_model(amodel) if amodel else "worker",
+                            f"attempt {n}, tool: bash in the task container"))
+            turn = 0
+            for i, m in enumerate(msgs[2:], start=2):
+                if m.get("role") != "assistant":
+                    continue
+                turn += 1
+                thought, cmd = split_reply(str(m.get("content") or ""))
+                secs = f"{calls[call_i]['ms'] / 1000:.0f}s" if call_i < len(calls) else ""
+                call_i += 1
+                line = Text(f"  {turn:>2}. ", style="dim")
+                line.append(describe_command(cmd) if cmd else "replied without a command", style="bold")
+                if secs:
+                    line.append(f"  ({secs})", style="dim")
+                out.append(line)
+                if thought:
+                    out.append(Text(f"      thinking: {_short(thought, 170)}", style="italic"))
+                if cmd and SUBMIT_MARK not in cmd:
+                    out.append(Text(f"      $ {_short(cmd, 170)}", style="cyan"))
+                nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+                if nxt and nxt.get("role") == "exit":
+                    out.append(Text(f"      → {_short(nxt.get('content'), 170)}", style="green"))
+                elif nxt and nxt.get("role") != "assistant":
+                    ok, summary = summarize_output(str(nxt.get("content") or ""))
+                    out.append(Text(f"      → {summary}", style="green" if ok else "red"))
+                elif not nxt:
+                    out.append(Text("      … running", style="yellow"))
+            a = attempts.get(n)
+            if a:
+                v = head("VERIFIER", "task container")
+                how = f"ran `{_short(a['check'], 60)}`" if a.get("check") else "no check for this step, accepted the worker's done"
+                v.append(f"  {how} → ")
+                v.append("passed ✔" if a.get("passed") else "failed ✘", style="bold green" if a.get("passed") else "bold red")
+                if a.get("exit_status") not in (None, "Submitted"):
+                    v.append(f"  (worker stopped: {a['exit_status']})", style="dim")
+                out.append(v)
+        esc = next((e for e in events if e.get("event") == "escalate" and e.get("step") == sid), None)
+        if esc:
+            to = tiers[esc["to_tier"]] if tiers and esc.get("to_tier", 99) < len(tiers) else f"tier {esc.get('to_tier')}"
+            out.append(head("ESCALATE", "orchestrator", f"check failed, retrying one tier up on {pretty_model(to)}"))
+        out.append(Text(""))
+    done = next((e for e in events if e.get("event") == "done"), None)
+    if done:
+        ok = done.get("n_failed_steps") == 0
+        out.append(head("DONE", "orchestrator",
+                        "all steps passed" if ok else f"{done.get('n_failed_steps')} step(s) failed"
+                        + (f", {done.get('n_escalations')} escalation(s)" if done.get("n_escalations") else "")))
+    return out
+
 # ---------- screens ----------
 
 class NewRunScreen(ModalScreen):
@@ -360,11 +557,13 @@ class HarnessTUI(App):
                 yield Static(id="roles")
                 with TabbedContent(initial="tab-activity"):
                     with TabPane("Who did what", id="tab-activity"):
-                        yield RichLog(id="feed", wrap=True)
+                        yield RichLog(id="story", wrap=True)
                     with TabPane("Steps", id="tab-steps"):
                         yield DataTable(id="steps", zebra_stripes=True, cursor_type="row")
                     with TabPane("Worker turns", id="tab-worker"):
                         yield RichLog(id="worker", wrap=True)
+                    with TabPane("Raw events", id="tab-raw"):
+                        yield RichLog(id="feed", wrap=True)
                     with TabPane("Harbor log", id="tab-log"):
                         yield RichLog(id="log", wrap=True)
         yield Footer()
@@ -433,6 +632,11 @@ class HarnessTUI(App):
         self.query_one("#roles", Static).update(roles_text(events) if events else
                                                 Text("waiting for the trace (container build, Laya load) ...",
                                                      style="dim"))
+        worker_msgs = {w.stem: J.read_worker(w) for w in workers}
+        story = self.query_one("#story", RichLog)
+        story.clear()
+        for line in story_lines(events, worker_msgs):
+            story.write(line)
         feed = self.query_one("#feed", RichLog)
         feed.clear()
         for line in activity_lines(events):

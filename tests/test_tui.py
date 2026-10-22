@@ -137,8 +137,8 @@ def test_tui_shows_job_and_starts_a_run(tmp_path):
         async with app.run_test(size=(160, 50)) as pilot:
             await pilot.pause()
             assert len(app.query_one("#jobs").children) == 1
-            feed = "\n".join(strip.text for strip in app.query_one("#feed").lines)
-            assert "PLANNER" in feed and "droid/gpt-6-sol" in feed and "VERIFIER" in feed
+            story = "\n".join(strip.text for strip in app.query_one("#story").lines)
+            assert "PLANNER GPT-6 Sol (via Droid)" in story and "VERIFIER" in story and "passed" in story
             assert "Laya (laya_mlx" in app.query_one("#roles").render().plain
             await pilot.press("n")
             await pilot.pause()
@@ -149,3 +149,23 @@ def test_tui_shows_job_and_starts_a_run(tmp_path):
     launched = asyncio.run(main())
     assert launched and launched[0][0] == J.SMOKE_TASK and launched[0][2] == "laya"
     assert launched[0][3] == {"max_plan_steps": "5", "worker_step_limit": "25", "step_wall_time_sec": "900"}
+
+
+def test_story_reads_like_a_log_of_who_did_what():
+    from phase2.tui import describe_command, pretty_model, story_lines, summarize_output
+
+    assert pretty_model("droid/gpt-6-sol") == "GPT-6 Sol (via Droid)"
+    assert pretty_model("droid/deepseek-v4.1-flash") == "DeepSeek V4.1 Flash (via Droid)"
+    assert pretty_model("claude/claude-opus-5-5") == "Claude Opus 5.5 (via Claude Code)"
+    assert describe_command("cd /app && head -5 a.log && wc -l a.log") == "read the start of a.log"
+    assert describe_command("printf 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\\nok'") == "declared the step done"
+    assert summarize_output("<returncode>0</returncode>\n<output>\ntotal 4\nREADME\n</output>")[1] == "ok · 1 lines · README"
+    assert summarize_output("<returncode>127</returncode>\n<output>\nxxd: not found\n</output>")[0] is False
+    workers = {"worker_s1_a1": [{"role": "system", "content": "s"}, {"role": "user", "content": "task"},
+                                {"role": "assistant", "content": "THOUGHT: look first\n\n```mswea_bash_command\nls /app\n```"},
+                                {"role": "user", "content": "<returncode>0</returncode>\n<output>\na.txt\n</output>"}]}
+    story = "\n".join(l.plain for l in story_lines(EVENTS, workers))
+    assert "PLANNER GPT-6 Sol (via Droid)" in story and "Split the task into 1 step:" in story
+    assert "ROUTER Laya  judged it easy (0.40 of 2, 30% sure) → sent it to GLM 5.3 Flash (via Droid)" in story
+    assert "1. listed files" in story and "thinking: look first" in story and "$ ls /app" in story
+    assert "→ ok · 1 lines · a.txt" in story and "VERIFIER task container  ran `test -f x` → passed ✔" in story
