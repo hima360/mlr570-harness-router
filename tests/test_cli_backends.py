@@ -271,3 +271,45 @@ def test_run_group_timeout_kills_helper_processes():
         run_group(["sh", "-c", "sleep 30 & sleep 30"], timeout=0.5)  # background child holds the pipe
     assert time.monotonic() - t0 < 5
     assert run_group(["sh", "-c", "cat"], input="hi", timeout=5).stdout == "hi"
+
+
+# ---------- stall prevention: step wall-clock budget and output clipping ----------
+
+def test_worker_stops_at_step_wall_time():
+    import time as _time
+
+    from phase2.cli_models import make_text_model
+
+    env = FakeEnvironment(lambda cmd: ("ok", 0))
+
+    def slow_complete(model, messages):
+        _time.sleep(0.6)
+        return "THOUGHT: look\n\n```mswea_bash_command\nls\n```", {"prompt_tokens": 10, "completion_tokens": 2}
+
+    led = Ledger({}, credits_usd=None)
+    model_id = "droid/glm-5.3-flash"
+    model = make_text_model(model_id, lambda u: led.add_from_usage(model_id, u), complete_fn=slow_complete)
+    cfg = load_config(step_wall_time_sec=1, worker_step_limit=50)
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        return await asyncio.to_thread(run_worker, cfg, led, model_id, adapter, task_overall="T",
+                                       step=Step(id="s1", goal="g"), blackboard_text="-", model=model)
+
+    t0 = _time.monotonic()
+    res = asyncio.run(main())
+    assert res.exit_status == "TimeExceeded" and res.n_calls == 2 and _time.monotonic() - t0 < 3
+
+
+def test_long_command_output_is_clipped():
+    from phase2.worker import clip_output
+
+    env = FakeEnvironment(lambda cmd: ("A" * 6000 + "B" * 6000, 0))
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30, max_output_chars=1000)
+        return await asyncio.to_thread(adapter.execute, {"command": "cat big"})  # sync API, worker thread
+
+    out = asyncio.run(main())["output"]
+    assert out.startswith("A" * 500) and out.endswith("B" * 500) and "11000 characters elided" in out
+    assert clip_output("short", 1000) == "short" and clip_output("x" * 50, 0) == "x" * 50

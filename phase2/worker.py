@@ -37,13 +37,22 @@ class WorkerResult:
     n_calls: int
 
 
+def clip_output(text: str, limit: int) -> str:
+    if limit <= 0 or len(text) <= limit:
+        return text
+    half = limit // 2
+    return (f"{text[:half]}\n\n[... {len(text) - 2 * half} characters elided; print a narrower slice "
+            f"(head, tail, grep, sed -n) to see more ...]\n\n{text[-half:]}")
+
+
 class HarborEnvAdapter:
     """mini-swe-agent Environment protocol on top of a Harbor BaseEnvironment."""
 
-    def __init__(self, environment, loop: asyncio.AbstractEventLoop, timeout: int):
+    def __init__(self, environment, loop: asyncio.AbstractEventLoop, timeout: int, max_output_chars: int = 10000):
         self.environment = environment
         self.loop = loop
         self.timeout = timeout
+        self.max_output_chars = max_output_chars
         self.config = {"timeout": timeout}
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
@@ -64,6 +73,7 @@ class HarborEnvAdapter:
             summary = "".join(lines[1:]).strip()
             raise Submitted({"role": "exit", "content": summary,
                              "extra": {"exit_status": "Submitted", "submission": summary}})
+        out["output"] = clip_output(out["output"], self.max_output_chars)
         return out
 
     def get_template_vars(self, **kwargs) -> dict:
@@ -120,6 +130,7 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
         system_template="You are a careful software engineer operating a Linux shell.",
         instance_template=INSTANCE_TEMPLATE,
         step_limit=cfg.worker_step_limit, cost_limit=0, output_path=output_path,
+        wall_time_limit_seconds=cfg.step_wall_time_sec,
     )
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,

@@ -39,6 +39,12 @@ class HarnessConfig:
     reasoning_effort: dict = field(default_factory=dict)
     # Per CLI call. The slowest healthy call seen took 41 s; a stalled provider stream hung for 10 min.
     cli_timeout_sec: int = 180
+    # Per worker step (one attempt): no new model call starts after this, so a slow model cannot
+    # hold a step for hours; the verifier then fails the step and it escalates.
+    step_wall_time_sec: int = 900
+    # Long command outputs are cut to head + tail: every CLI call re-sends the whole conversation,
+    # and raw dumps made deepseek turns take 5-14 min.
+    max_observation_chars: int = 10000
     max_plan_steps: int = 8
     max_parallel: int = 3
     worker_step_limit: int = 40

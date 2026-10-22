@@ -22,7 +22,8 @@ from .trace import Trace
 from .worker import HarborEnvAdapter, run_worker
 
 CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "max_parallel",
-               "max_plan_steps", "worker_step_limit")
+               "max_plan_steps", "worker_step_limit", "cli_timeout_sec", "step_wall_time_sec",
+               "max_observation_chars")
 
 
 class RoutedHarness(BaseAgent):
@@ -49,7 +50,8 @@ class RoutedHarness(BaseAgent):
         trace = Trace(logs / "trace.jsonl")
         trace.log("config", **self.cfg.to_dict())
         loop = asyncio.get_running_loop()
-        adapter = HarborEnvAdapter(environment, loop, self.cfg.worker_command_timeout)
+        adapter = HarborEnvAdapter(environment, loop, self.cfg.worker_command_timeout,
+                                   max_output_chars=self.cfg.max_observation_chars)
 
         def ask_planner(messages):
             return chat(self.cfg, ledger, self.cfg.planner_model, messages)
