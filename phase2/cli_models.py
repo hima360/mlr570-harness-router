@@ -4,7 +4,9 @@ Each call is stateless: the conversation is serialized into one prompt, and the 
 `result` object with the reply and usage. Both CLIs add their own system prompt and per-call
 overhead, so token counts here are inflated versus a raw API.
 """
+import functools
 import json
+import time
 
 PROMPT_HEADER = ("You are acting as a plain language model inside another program. Do not use any "
                  "tools, do not read or write files. Reply only with the next ASSISTANT message for "
@@ -21,21 +23,40 @@ def serialize(messages: list[dict], header: str = PROMPT_HEADER) -> str:
     return header + "\n\n".join(parts) + "\n\n### ASSISTANT\n"
 
 
-def parse_result(proc, cli: str) -> dict:
-    """Last JSON line with type == result; raises on a missing or error result."""
-    result = None
-    for line in reversed((proc.stdout or "").strip().splitlines()):
+def _last_result(stdout: str | None) -> dict | None:
+    for line in reversed((stdout or "").strip().splitlines()):
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
         if isinstance(obj, dict) and obj.get("type") == "result":
-            result = obj
-            break
+            return obj
+    return None
+
+
+def parse_result(proc, cli: str) -> dict:
+    """Last JSON line with type == result; raises on a missing or error result."""
+    result = _last_result(proc.stdout)
     if result is None or result.get("is_error"):
         raise RuntimeError(f"{cli} failed (rc={proc.returncode}): {(proc.stderr or proc.stdout or '')[-500:]}")
     return result
 
+
+RETRY_WAIT_SEC = 5.0
+
+
+def run_cli(call, cli: str, attempts: int = 2) -> dict:
+    """call() -> CompletedProcess. Retries only failures where no model turn ran (nothing billed):
+    network drops and transient model-catalog errors have each killed a whole trial before."""
+    for i in range(attempts):
+        proc = call()
+        try:
+            return parse_result(proc, cli)
+        except RuntimeError:
+            ran = (_last_result(proc.stdout) or {}).get("num_turns") or 0
+            if ran or i == attempts - 1:
+                raise
+            time.sleep(RETRY_WAIT_SEC)
 
 def openai_usage(u: dict, **extra) -> dict:
     """Anthropic-style usage -> OpenAI-style. prompt_tokens includes cache reads and cache writes."""
@@ -45,16 +66,19 @@ def openai_usage(u: dict, **extra) -> dict:
             "prompt_tokens_details": {"cached_tokens": cached}, **extra}
 
 
-def complete_fn_for(model: str):
-    """The CLI backend's complete(model, messages) for this model id, or None for opencodex models."""
+def complete_fn_for(model: str, cfg=None):
+    """The CLI backend's complete(model, messages) for this model id, or None for opencodex models.
+    With a config, the model's pinned reasoning effort is bound in."""
     from . import claude_code, droid
 
     if droid.is_droid(model):
-        return droid.complete
-    if claude_code.is_claude_code(model):
-        return claude_code.complete
-    return None
-
+        fn = droid.complete
+    elif claude_code.is_claude_code(model):
+        fn = claude_code.complete
+    else:
+        return None
+    effort = (getattr(cfg, "reasoning_effort", None) or {}).get(model)
+    return functools.partial(fn, effort=effort) if effort else fn
 
 def make_text_model(model: str, on_usage, complete_fn=None):
     """mini-swe-agent text-based model whose completions come from a CLI backend."""

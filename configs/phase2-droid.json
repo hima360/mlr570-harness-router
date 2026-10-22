@@ -28,5 +28,11 @@
       "droid/glm-5.3": 0.56,
       "droid/gpt-6-sol": 0.8
     }
+  },
+  "reasoning_effort": {
+    "droid/glm-5.3-flash": "high",
+    "droid/deepseek-v4.1-flash": "high",
+    "droid/glm-5.3": "max",
+    "droid/gpt-6-sol": "medium"
   }
 }

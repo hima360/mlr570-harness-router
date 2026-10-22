@@ -32,5 +32,10 @@
   "worker_step_limit": 40,
   "worker_command_timeout": 180,
   "check_timeout": 300,
-  "random_seed": 570
+  "random_seed": 570,
+  "reasoning_effort": {
+    "claude/claude-haiku-5-5": "medium",
+    "claude/claude-sonnet-5-5": "medium",
+    "claude/claude-opus-5-5": "medium"
+  }
 }

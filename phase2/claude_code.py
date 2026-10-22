@@ -8,7 +8,7 @@ import os
 import subprocess
 import tempfile
 
-from .cli_models import PROMPT_HEADER, openai_usage, parse_result, serialize
+from .cli_models import PROMPT_HEADER, openai_usage, run_cli, serialize
 
 PREFIX = "claude/"
 
@@ -22,18 +22,18 @@ def is_claude_code(model: str) -> bool:
     return model.startswith(PREFIX)
 
 
-def complete(model: str, messages: list[dict], timeout: int = 600, run=subprocess.run) -> tuple[str, dict]:
+def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600,
+             run=subprocess.run) -> tuple[str, dict]:
     """Returns (reply text, OpenAI-style usage incl. claude_code_cost_usd). `run` is injectable for tests."""
     model_id = model[len(PREFIX):] if is_claude_code(model) else model
     system = "\n\n".join(str(m.get("content") or "") for m in messages if m.get("role") == "system")
     rest = [m for m in messages if m.get("role") != "system"]
     env = {k: v for k, v in os.environ.items() if k not in API_ENV_VARS}
     with tempfile.TemporaryDirectory() as d:
-        p = run(["claude", "-p", "--model", model_id, "--output-format", "json", "--tools", "",
-                 "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
-                 "--system-prompt", (PROMPT_HEADER + system).strip()],
-                input=serialize(rest, header=""), cwd=d, env=env, capture_output=True, text=True,
-                timeout=timeout)
-    result = parse_result(p, "claude -p")
+        argv = ["claude", "-p", "--model", model_id, "--output-format", "json", "--tools", "",
+                "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
+                "--system-prompt", (PROMPT_HEADER + system).strip()] + (["--effort", effort] if effort else [])
+        result = run_cli(lambda: run(argv, input=serialize(rest, header=""), cwd=d, env=env,
+                                     capture_output=True, text=True, timeout=timeout), "claude -p")
     return result.get("result") or "", openai_usage(result.get("usage") or {},
                                                     claude_code_cost_usd=result.get("total_cost_usd"))

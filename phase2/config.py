@@ -35,6 +35,8 @@ class HarnessConfig:
     api_key: str = "local"
     prices_per_million: dict = field(default_factory=lambda: dict(DEFAULT_PRICES))
     prices_source: str = ""  # where and when the list prices were checked
+    # CLI models only: model id -> effort level (droid -r / claude --effort). Missing = CLI default.
+    reasoning_effort: dict = field(default_factory=dict)
     max_plan_steps: int = 8
     max_parallel: int = 3
     worker_step_limit: int = 40

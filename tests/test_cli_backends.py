@@ -176,3 +176,62 @@ def test_claude_code_config_and_list_price_cost():
     ctx = AgentContext()
     led.fill_context(ctx)
     assert ctx.metadata == {"claude_code_cost_usd": {"claude/claude-sonnet-5-5": 3.5}}
+
+
+# ---------- effort pinning and retry ----------
+
+@pytest.fixture(autouse=True)
+def _no_retry_wait(monkeypatch):
+    from phase2 import cli_models
+
+    monkeypatch.setattr(cli_models, "RETRY_WAIT_SEC", 0)
+
+
+def _ok_run(calls, fail_first=0, fail_stdout="Invalid model: x"):
+    def run(argv, **kw):
+        calls.append(argv)
+        if len(calls) <= fail_first:
+            return subprocess.CompletedProcess(argv, 1, stdout=fail_stdout, stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+    return run
+
+
+def test_effort_comes_from_config():
+    from phase2.cli_models import complete_fn_for
+
+    for path, model, flag in (("configs/phase2-droid.json", "droid/gpt-6-sol", "-r"),
+                              ("configs/phase2-claude-code.json", "claude/claude-opus-5-5", "--effort")):
+        cfg = load_config(ROOT / path)
+        assert set(cfg.reasoning_effort) == set(cfg.tiers)
+        calls = []
+        complete_fn_for(model, cfg)(model, [{"role": "user", "content": "x"}], run=_ok_run(calls))
+        assert calls[0][calls[0].index(flag) + 1] == cfg.reasoning_effort[model]
+    calls = []
+    droid.complete("droid/kimi-k3", [{"role": "user", "content": "x"}], run=_ok_run(calls))
+    assert "-r" not in calls[0]  # no pin -> CLI default
+
+
+def test_cli_retries_once_when_no_turn_ran():
+    calls = []
+    text, _ = droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                             run=_ok_run(calls, fail_first=1))
+    assert text == "ok" and len(calls) == 2
+
+    zero_turns = json.dumps({"type": "result", "is_error": True, "num_turns": 0, "result": "Exec failed"})
+    calls = []
+    with pytest.raises(RuntimeError):
+        droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                       run=_ok_run(calls, fail_first=9, fail_stdout=zero_turns))
+    assert len(calls) == 2
+
+
+def test_cli_does_not_retry_after_a_model_turn():
+    from phase2 import claude_code
+
+    after_turn = json.dumps({"type": "result", "is_error": True, "num_turns": 1,
+                             "result": "Failed to authenticate"})
+    calls = []
+    with pytest.raises(RuntimeError, match="authenticate"):
+        claude_code.complete("claude/claude-haiku-5-5", [{"role": "user", "content": "x"}],
+                             run=_ok_run(calls, fail_first=9, fail_stdout=after_turn))
+    assert len(calls) == 1

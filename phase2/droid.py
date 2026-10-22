@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .cli_models import openai_usage, parse_result, serialize
+from .cli_models import openai_usage, run_cli, serialize
 
 PREFIX = "droid/"
 
@@ -18,7 +18,8 @@ def is_droid(model: str) -> bool:
     return model.startswith(PREFIX)
 
 
-def complete(model: str, messages: list[dict], timeout: int = 600, run=subprocess.run) -> tuple[str, dict]:
+def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600,
+             run=subprocess.run) -> tuple[str, dict]:
     """Returns (reply text, OpenAI-style usage dict incl. factory_credits). `run` is injectable for tests."""
     model_id = model[len(PREFIX):] if is_droid(model) else model
     with tempfile.TemporaryDirectory() as d:
@@ -26,9 +27,9 @@ def complete(model: str, messages: list[dict], timeout: int = 600, run=subproces
         prompt.write_text(serialize(messages))
         # Only TodoWrite (no side effects) stays allowed: otherwise Droid's read-only Execute, Read,
         # Grep, WebSearch and FetchUrl run on the host, outside the harness and the task container.
-        p = run(["droid", "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
-                 "--only-tools", "TodoWrite", "-f", str(prompt)],
-                cwd=d, capture_output=True, text=True, timeout=timeout)
-    result = parse_result(p, "droid exec")
+        argv = ["droid", "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
+                "--only-tools", "TodoWrite", "-f", str(prompt)] + (["-r", effort] if effort else [])
+        result = run_cli(lambda: run(argv, cwd=d, capture_output=True, text=True, timeout=timeout),
+                         "droid exec")
     u = result.get("usage") or {}
     return result.get("result") or "", openai_usage(u, factory_credits=u.get("factory_credits"))

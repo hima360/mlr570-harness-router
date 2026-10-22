@@ -13,7 +13,7 @@ def chat(cfg, ledger, model: str, messages: list[dict], **kwargs) -> str:
     """One blocking chat call; records usage on the ledger and returns the reply text."""
     from .cli_models import complete_fn_for
 
-    cli_complete = complete_fn_for(model)
+    cli_complete = complete_fn_for(model, cfg)
     if cli_complete is not None:
         text, usage = cli_complete(model, messages)
         ledger.add_from_usage(model, usage)

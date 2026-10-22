@@ -88,7 +88,8 @@ def _make_model(cfg, ledger, model_id: str):
     from .llm import litellm_name
 
     if complete_fn_for(model_id) is not None:
-        return make_text_model(model_id, lambda u: ledger.add_from_usage(model_id, u))
+        return make_text_model(model_id, lambda u: ledger.add_from_usage(model_id, u),
+                               complete_fn=complete_fn_for(model_id, cfg))
 
     class LedgerModel(LitellmModel):
         def query(self, messages, **kwargs):
