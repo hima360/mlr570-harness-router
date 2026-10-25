@@ -1,7 +1,7 @@
 {
   "tiers": [
-    "droid/glm-5.3-flash",
     "droid/gpt-6-luna",
+    "droid/glm-5.3-flash",
     "claude/claude-haiku-5-5",
     "claude/claude-sonnet-5-5",
     "droid/gpt-6.1-sol"
