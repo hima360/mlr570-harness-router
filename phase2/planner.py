@@ -12,9 +12,16 @@ For each step give:
 - goal: what this step must achieve, self-contained, specific enough to act on alone
 - depends_on: ids of steps that must finish first
 - writes: file paths or globs this step may create or modify ([] if it only reads)
-- check: one shell command that exits 0 only if the step succeeded ("" if no reliable check exists)
+- check: one shell command that exits 0 only if the step succeeded
 
-Steps that write overlapping files must depend on each other. Do not invent files you have not seen.
+Every step needs a real check: the verifier runs it to decide whether the step is done, and a failed
+check moves the step to a stronger model. A step that only investigates must write its findings to
+/tmp/steps/<id>.txt (list that path in writes), and its check confirms the file holds the concrete
+result (for example a grep for the value found), not just that the file exists.
+
+Keep each step small enough for a modest model to finish in about 10 shell commands; split long
+investigations into separate steps. Steps that write overlapping files must depend on each other.
+Do not invent files you have not seen.
 
 Task:
 {instruction}
