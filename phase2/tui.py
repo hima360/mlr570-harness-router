@@ -105,6 +105,14 @@ def activity_lines(events: list[dict]) -> list[Text]:
             said = f"$ {m.group(1).strip()}" if m else e.get("reply", "")
             out.append(_line(t, "WORKER", e.get("model", "?"),
                              f"{e.get('step')}  {_secs(e.get('ms'))}  {_usage(e)}  {said[:140]}"))
+        elif ev == "llm_call_failed":
+            what = {"timeout": "no reply", "provider_unavailable": "provider unreachable",
+                    "transient": "quick failure", "error": "failed"}.get(e.get("kind"), e.get("kind"))
+            then = "retrying" if e.get("will_retry") else "giving up on this call"
+            line = _line(t, e.get("role", "?").upper(), e.get("model", "?"),
+                         f"{e.get('step', '')}  {_secs(e.get('ms'))}  ")
+            line.append(f"CALL FAILED: {what}, {then}", style="bold red")
+            out.append(line)
         elif ev == "attempt":
             check = e.get("check") or ""
             how = f"check `{check[:60]}`" if check else "no check, trusts the worker's submit"

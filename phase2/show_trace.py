@@ -29,6 +29,10 @@ def render(trace_path: Path) -> str:
             mark = "PASS" if e["passed"] else "FAIL"
             out.append(f"[{e['t']:7.2f}s] {mark} {e['step']} attempt {e['attempt']} on {e['model']} "
                        f"({e['n_calls']} calls, {e['exit_status']})")
+        elif ev == "llm_call_failed":
+            retry = ", retrying" if e.get("will_retry") else ""
+            out.append(f"[{e['t']:7.2f}s] CALL FAILED {e.get('role')} {e.get('step', '')} {e.get('model')} "
+                       f"{e['kind']} after {e['ms'] / 1000:.0f} s{retry}")
         elif ev == "escalate":
             out.append(f"[{e['t']:7.2f}s] ESCALATE {e['step']} tier {e['from_tier']} -> {e['to_tier']}")
         elif ev == "done":

@@ -18,15 +18,23 @@ def record_call(ledger, model: str, usage, ms: float, reply: str) -> dict:
             "cost_usd": round(cost, 6), "reply": " ".join(str(reply or "").split())[:300]}
 
 
+PLANNER_RETRY_WAIT_SEC = 5.0
+
+
 def chat(cfg, ledger, model: str, messages: list[dict], on_call=None, **kwargs) -> str:
     """One blocking chat call; records usage on the ledger and returns the reply text.
     `on_call(info)` gets the call record (model, ms, tokens, cost, reply snippet)."""
-    from .cli_models import complete_fn_for
+    from .cli_models import ProviderUnavailable, complete_fn_for
 
     t0 = time.perf_counter()
     cli_complete = complete_fn_for(model, cfg)
     if cli_complete is not None:
-        text, usage = cli_complete(model, messages)
+        try:
+            text, usage = cli_complete(model, messages)
+        except ProviderUnavailable:  # the planner has no fallback model: one more try after a pause
+            time.sleep(PLANNER_RETRY_WAIT_SEC)
+            t0 = time.perf_counter()
+            text, usage = cli_complete(model, messages)
     else:
         import litellm
 

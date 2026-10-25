@@ -38,6 +38,6 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
         argv = [droid_bin(), "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
                 "--only-tools", "TodoWrite", "-f", str(prompt)] + (["-r", effort] if effort else [])
         result = run_cli(lambda: run(argv, cwd=d, capture_output=True, text=True, timeout=timeout),
-                         "droid exec")
+                         "droid exec", model=model)
     u = result.get("usage") or {}
     return result.get("result") or "", openai_usage(u, factory_credits=u.get("factory_credits"))

@@ -13,6 +13,7 @@ from pathlib import Path
 from harbor.agents.base import BaseAgent
 
 from . import __version__
+from .cli_models import report_failures
 from .config import load_config
 from .ledger import Ledger
 from .llm import chat
@@ -54,13 +55,15 @@ class RoutedHarness(BaseAgent):
                                    max_output_chars=self.cfg.max_observation_chars)
 
         def ask_planner(messages):
-            return chat(self.cfg, ledger, self.cfg.planner_model, messages,
-                        on_call=lambda info: trace.log("llm_call", role="planner", **info))
+            with report_failures(lambda info: trace.log("llm_call_failed", role="planner", **info)):
+                return chat(self.cfg, ledger, self.cfg.planner_model, messages,
+                            on_call=lambda info: trace.log("llm_call", role="planner", **info))
 
         def work(step, model_id, blackboard_text, output_path):
-            return run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=step,
-                              blackboard_text=blackboard_text, output_path=output_path,
-                              on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info))
+            with report_failures(lambda info: trace.log("llm_call_failed", role="worker", step=step.id, **info)):
+                return run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=step,
+                                  blackboard_text=blackboard_text, output_path=output_path,
+                                  on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info))
 
         orch = Orchestrator(self.cfg, ledger, trace, Router(self.cfg), ask_planner, work, logs)
 

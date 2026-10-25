@@ -391,3 +391,76 @@ def test_idle_limit_stops_a_stuck_step_but_not_a_slow_one():
     t0 = _time.monotonic()
     res = run(stuck, 0.5)
     assert res.exit_status == "StepIdle" and "no model reply" in res.summary and _time.monotonic() - t0 < 10
+
+
+ZERO_TURNS = json.dumps({"type": "result", "is_error": True, "num_turns": 0, "result": "Exec failed"})
+
+
+def test_slow_zero_turn_failure_fails_fast_and_is_reported(monkeypatch):
+    from phase2 import cli_models
+
+    monkeypatch.setattr(cli_models, "QUICK_FAIL_MS", 0)  # every failure counts as slow
+    seen, calls = [], []
+    with cli_models.report_failures(seen.append), pytest.raises(cli_models.ProviderUnavailable):
+        droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                       run=_ok_run(calls, fail_first=9, fail_stdout=ZERO_TURNS))
+    assert len(calls) == 1  # no second ~80 s attempt
+    assert seen and seen[0]["kind"] == "provider_unavailable" and seen[0]["model"] == "droid/glm-5.3-flash"
+    assert seen[0]["will_retry"] is False
+
+
+def test_timeout_is_reported_with_retry_flag():
+    from phase2 import cli_models
+
+    def run(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 180)
+
+    seen = []
+    with cli_models.report_failures(seen.append), pytest.raises(RuntimeError, match="timed out"):
+        droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}], run=run)
+    assert [(s["kind"], s["will_retry"]) for s in seen] == [("timeout", True), ("timeout", False)]
+
+
+def test_mini_swe_agent_does_not_retry_provider_unavailable():
+    from phase2 import cli_models
+
+    calls = []
+
+    def down(model, messages):
+        calls.append(1)
+        raise cli_models.ProviderUnavailable("droid exec failed (rc=1): Exec failed")
+
+    env = FakeEnvironment()
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, complete_fn=down)
+        return await asyncio.to_thread(run_worker, load_config(), Ledger({}), "droid/glm-5.3-flash", adapter,
+                                       task_overall="T", step=Step(id="s1", goal="g"), blackboard_text="-",
+                                       model=model)
+
+    res = asyncio.run(main())
+    assert res.exit_status == "ProviderUnavailable" and len(calls) == 1
+
+
+def test_planner_retries_once_when_provider_unavailable(monkeypatch):
+    from phase2 import cli_models, llm
+
+    monkeypatch.setattr(llm, "PLANNER_RETRY_WAIT_SEC", 0)
+    calls = []
+
+    def flaky(model, messages):
+        calls.append(1)
+        if len(calls) == 1:
+            raise cli_models.ProviderUnavailable("down")
+        return "plan", {"prompt_tokens": 10, "completion_tokens": 2}
+
+    monkeypatch.setattr(cli_models, "complete_fn_for", lambda model, cfg=None: flaky)
+    cfg = load_config(ROOT / "configs/phase2-droid.json")
+    assert llm.chat(cfg, Ledger({}), "droid/gpt-6-sol", [{"role": "user", "content": "x"}]) == "plan"
+    assert len(calls) == 2
+
+
+def test_droid_config_has_no_deepseek():
+    cfg = load_config(ROOT / "configs/phase2-droid.json")
+    assert not any("deepseek" in m for m in cfg.tiers + list(cfg.reasoning_effort))

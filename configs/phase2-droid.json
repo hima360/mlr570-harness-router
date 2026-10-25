@@ -1,7 +1,6 @@
 {
   "tiers": [
     "droid/glm-5.3-flash",
-    "droid/deepseek-v4.1-flash",
     "droid/glm-5.3",
     "droid/gpt-6-sol"
   ],
@@ -21,17 +20,15 @@
     "usd": null,
     "source": "https://docs.factory.com/pricing/individuals.md ; https://docs.factory.com/models.md ; https://factory.com/pricing",
     "checked": "2026-10-22",
-    "note": "Factory does not publish a USD value for one Factory Standard Credit (pricing page, plan pages, models page and Analytics API reference checked 2026-10-22). Droid cost_usd therefore stays 0 and factory_credits are reported per model. Measured: credits ~= input tokens x model multiplier (glm-5.3-flash 7314 tok -> 465 credits; gpt-6-sol 8336 tok -> 6689 credits).",
+    "note": "Factory does not publish a USD value for one Factory Standard Credit (pricing page, plan pages, models page and Analytics API reference checked 2026-10-22). Droid cost_usd therefore stays 0 and factory_credits are reported per model. Measured: credits ~= input tokens x model multiplier (glm-5.3-flash 7314 tok -> 465 credits; gpt-6-sol 8336 tok -> 6689 credits). droid/deepseek-v4.1-flash dropped 2026-10-25: 11 Connection errors and 4 repetition loops on Factory on 2026-10-22.",
     "multipliers": {
       "droid/glm-5.3-flash": 0.06,
-      "droid/deepseek-v4.1-flash": 0.12,
       "droid/glm-5.3": 0.56,
       "droid/gpt-6-sol": 0.8
     }
   },
   "reasoning_effort": {
     "droid/glm-5.3-flash": "high",
-    "droid/deepseek-v4.1-flash": "high",
     "droid/glm-5.3": "max",
     "droid/gpt-6-sol": "medium"
   }

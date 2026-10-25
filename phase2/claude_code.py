@@ -33,6 +33,7 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
                 "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
                 "--system-prompt", (PROMPT_HEADER + system).strip()] + (["--effort", effort] if effort else [])
         result = run_cli(lambda: run(argv, input=serialize(rest, header=""), cwd=d, env=env,
-                                     capture_output=True, text=True, timeout=timeout), "claude -p")
+                                     capture_output=True, text=True, timeout=timeout), "claude -p",
+                         model=model)
     return result.get("result") or "", openai_usage(result.get("usage") or {},
                                                     claude_code_cost_usd=result.get("total_cost_usd"))

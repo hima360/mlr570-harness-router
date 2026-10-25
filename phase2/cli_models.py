@@ -4,9 +4,11 @@ Each call is stateless: the conversation is serialized into one prompt, and the 
 `result` object with the reply and usage. Both CLIs add their own system prompt and per-call
 overhead, so token counts here are inflated versus a raw API.
 """
+import contextlib
 import functools
 import json
 import subprocess
+import threading
 import time
 
 PROMPT_HEADER = ("You are acting as a plain language model inside another program. Do not use any "
@@ -65,26 +67,68 @@ def run_group(argv, *, input=None, cwd=None, env=None, timeout=None, capture_out
     return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
 RETRY_WAIT_SEC = 5.0
+QUICK_FAIL_MS = 30_000  # zero-turn failures faster than this are retried once
 
 
-def run_cli(call, cli: str, attempts: int = 2) -> dict:
-    """call() -> CompletedProcess. Retries once on a timeout (a provider stream that stalled) and on
-    failures where no model turn ran (nothing billed): network drops and transient model-catalog
-    errors have each killed a whole trial before."""
+class ProviderUnavailable(RuntimeError):
+    """The CLI failed before any model turn ran (Droid prints only "Exec failed"; its log shows
+    "Connection error."). Each such failure already cost ~80 s inside the CLI, so it is not retried
+    here, and mini-swe-agent must not retry it either: the step attempt ends and escalates."""
+
+
+_sink = threading.local()
+
+
+@contextlib.contextmanager
+def report_failures(fn):
+    """Within this thread, every failed CLI attempt is passed to `fn(info)` (for the trace)."""
+    prev = getattr(_sink, "fn", None)
+    _sink.fn = fn
+    try:
+        yield
+    finally:
+        _sink.fn = prev
+
+
+def _report(**info) -> None:
+    fn = getattr(_sink, "fn", None)
+    if fn:
+        fn(info)
+
+
+def run_cli(call, cli: str, attempts: int = 2, model: str | None = None) -> dict:
+    """call() -> CompletedProcess. Retries once on a timeout (a provider stream that stalled) and on a
+    quick zero-turn failure. A slow zero-turn failure (provider unreachable) raises ProviderUnavailable
+    at once. Every failed attempt is reported to the thread's failure sink."""
     for i in range(attempts):
+        t0 = time.perf_counter()
         try:
             proc = call()
         except subprocess.TimeoutExpired as e:
-            if i == attempts - 1:
+            last = i == attempts - 1
+            _report(cli=cli, model=model, attempt=i + 1, kind="timeout",
+                    ms=round((time.perf_counter() - t0) * 1e3), error=f"no reply in {e.timeout:.0f} s",
+                    will_retry=not last)
+            if last:
                 raise RuntimeError(f"{cli} timed out after {e.timeout:.0f} s") from e
             continue
         try:
             return parse_result(proc, cli)
-        except RuntimeError:
+        except RuntimeError as e:
             ran = (_last_result(proc.stdout) or {}).get("num_turns") or 0
-            if ran or i == attempts - 1:
+            ms = (time.perf_counter() - t0) * 1e3
+            # A quick zero-turn failure (transient "Invalid model" catalog blip) is cheap to retry once;
+            # a slow one is the provider being unreachable (~80 s each) and fails fast.
+            retry = not ran and ms < QUICK_FAIL_MS and i < attempts - 1
+            kind = "error" if ran else ("transient" if ms < QUICK_FAIL_MS else "provider_unavailable")
+            _report(cli=cli, model=model, attempt=i + 1, kind=kind, ms=round(ms), error=str(e)[-300:],
+                    will_retry=retry)
+            if retry:
+                time.sleep(RETRY_WAIT_SEC)
+                continue
+            if ran:
                 raise
-            time.sleep(RETRY_WAIT_SEC)
+            raise ProviderUnavailable(str(e)) from e
 
 def openai_usage(u: dict, **extra) -> dict:
     """Anthropic-style usage -> OpenAI-style. prompt_tokens includes cache reads and cache writes."""
@@ -142,7 +186,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
     guard = IdleGuard(idle_sec)
 
     class CliTextModel(LitellmTextbasedModel):
-        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle]
+        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable]
 
         def _query(self, messages, **kwargs):
             guard.check()
