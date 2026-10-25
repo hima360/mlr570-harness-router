@@ -9,7 +9,7 @@ import asyncio
 from pathlib import Path
 
 from .blackboard import Blackboard
-from .planner import make_plan, topo_order
+from .planner import load_pinned_plan, make_plan, topo_order
 from .scheduler import run_dag
 from .verifier import verify
 
@@ -22,9 +22,13 @@ class Orchestrator:
         self.on_progress = lambda: None  # agent.py refreshes the Harbor context here
 
     async def run(self, instruction: str, environment) -> dict:
-        env_summary = await self._env_summary(environment)
-        plan, plan_info = await asyncio.to_thread(
-            make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
+        if self.cfg.plan_from:  # same DAG as an earlier run: only the routing policy differs
+            plan = load_pinned_plan(self.cfg.plan_from, self.cfg.max_plan_steps)
+            plan_info = {"attempts": 0, "fallback": False, "errors": [], "pinned_from": str(self.cfg.plan_from)}
+        else:
+            env_summary = await self._env_summary(environment)
+            plan, plan_info = await asyncio.to_thread(
+                make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
         self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan),
                        planner_model=self.cfg.planner_model, **plan_info)
         bb = Blackboard(task=instruction)

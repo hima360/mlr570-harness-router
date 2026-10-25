@@ -48,6 +48,9 @@ class HarnessConfig:
     # and raw dumps made deepseek turns take 5-14 min.
     max_observation_chars: int = 10000
     max_plan_steps: int = 8
+    # Path to an earlier run's trace.jsonl (or its trial / agent dir): reuse that plan instead of calling
+    # the planner, so routing conditions are compared on the same DAG.
+    plan_from: str = ""
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180

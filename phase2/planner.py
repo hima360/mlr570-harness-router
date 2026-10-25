@@ -91,6 +91,28 @@ def single_step_plan(instruction: str) -> Plan:
     return Plan(steps=[Step(id="s1", goal=instruction, writes=["**"])])
 
 
+def load_pinned_plan(path, max_steps: int) -> Plan:
+    """The plan logged by an earlier run, so every routing policy runs the same DAG.
+    `path` is a trace.jsonl, or a trial / agent directory that holds one."""
+    from pathlib import Path
+
+    p = Path(path)
+    if p.is_dir():
+        p = next((c for c in (p / "trace.jsonl", p / "agent" / "trace.jsonl") if c.is_file()), p / "trace.jsonl")
+    try:
+        lines = p.read_text().splitlines()
+    except OSError as e:
+        raise PlanError(f"cannot read pinned plan {p}: {e}") from e
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("event") == "plan":
+            return parse_plan(json.dumps({"steps": event.get("steps", [])}), max_steps)
+    raise PlanError(f"no plan event in {p}")
+
+
 def make_plan(instruction: str, env_summary: str, ask, max_steps: int) -> tuple[Plan, dict]:
     """`ask(messages) -> str` is the model call. One repair attempt, then a single-step fallback."""
     messages = [{"role": "user", "content": PLANNER_PROMPT.format(

@@ -464,3 +464,44 @@ def test_planner_retries_once_when_provider_unavailable(monkeypatch):
 def test_droid_config_has_no_deepseek():
     cfg = load_config(ROOT / "configs/phase2-droid.json")
     assert not any("deepseek" in m for m in cfg.tiers + list(cfg.reasoning_effort))
+
+
+def test_two_timeouts_end_the_step_attempt_without_mini_retries():
+    from phase2 import cli_models
+
+    calls = []
+
+    def always_stalls(argv, timeout, **kw):
+        calls.append(1)
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    cfg = load_config(ROOT / "configs/phase2-droid.json", cli_timeout_sec=1)
+    complete = cli_models.complete_fn_for("droid/glm-5.3-flash", cfg)
+    env = FakeEnvironment()
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None,
+                                           complete_fn=lambda m, msgs: complete(m, msgs, run=always_stalls))
+        return await asyncio.to_thread(run_worker, cfg, Ledger({}), "droid/glm-5.3-flash", adapter,
+                                       task_overall="T", step=Step(id="s1", goal="g"), blackboard_text="-",
+                                       model=model)
+
+    res = asyncio.run(main())
+    # one CLI call + its retry, then the attempt ends (before: mini-swe-agent retried up to 10 times)
+    assert res.exit_status == "ModelTimedOut" and len(calls) == 2
+
+
+def test_one_timeout_then_reply_keeps_going():
+    from phase2 import cli_models
+
+    seen = []
+
+    def stalls_once(argv, timeout, **kw):
+        seen.append(1)
+        if len(seen) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+
+    text, _ = droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}], run=stalls_once)
+    assert text == "ok" and not issubclass(cli_models.ModelTimedOut, cli_models.ProviderUnavailable)

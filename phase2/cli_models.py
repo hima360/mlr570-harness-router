@@ -76,6 +76,12 @@ class ProviderUnavailable(RuntimeError):
     here, and mini-swe-agent must not retry it either: the step attempt ends and escalates."""
 
 
+class ModelTimedOut(RuntimeError):
+    """Two timeouts in a row (the call and its retry). The model is stuck writing very long replies or
+    the provider stream stalled; mini-swe-agent must not retry it (up to 10 more 2x timeouts), so the
+    step attempt ends and escalates at once."""
+
+
 _sink = threading.local()
 
 
@@ -97,9 +103,10 @@ def _report(**info) -> None:
 
 
 def run_cli(call, cli: str, attempts: int = 2, model: str | None = None) -> dict:
-    """call() -> CompletedProcess. Retries once on a timeout (a provider stream that stalled) and on a
-    quick zero-turn failure. A slow zero-turn failure (provider unreachable) raises ProviderUnavailable
-    at once. Every failed attempt is reported to the thread's failure sink."""
+    """call() -> CompletedProcess. Retries once on a timeout (a provider stream that stalled); a second
+    timeout raises ModelTimedOut, which ends the step attempt. Also retries once on a quick zero-turn
+    failure. A slow zero-turn failure (provider unreachable) raises ProviderUnavailable at once. Every
+    failed attempt is reported to the thread's failure sink."""
     for i in range(attempts):
         t0 = time.perf_counter()
         try:
@@ -110,7 +117,7 @@ def run_cli(call, cli: str, attempts: int = 2, model: str | None = None) -> dict
                     ms=round((time.perf_counter() - t0) * 1e3), error=f"no reply in {e.timeout:.0f} s",
                     will_retry=not last)
             if last:
-                raise RuntimeError(f"{cli} timed out after {e.timeout:.0f} s") from e
+                raise ModelTimedOut(f"{cli} timed out after {e.timeout:.0f} s, {attempts} times in a row") from e
             continue
         try:
             return parse_result(proc, cli)
@@ -186,7 +193,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
     guard = IdleGuard(idle_sec)
 
     class CliTextModel(LitellmTextbasedModel):
-        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable]
+        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable, ModelTimedOut]
 
         def _query(self, messages, **kwargs):
             guard.check()
