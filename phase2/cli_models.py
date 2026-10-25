@@ -182,7 +182,7 @@ class IdleGuard:
         self.last = time.monotonic()
 
 
-def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0):
+def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -196,9 +196,11 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
         abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable, ModelTimedOut]
 
         def _query(self, messages, **kwargs):
+            from .worker import compact_messages
+
             guard.check()
             t0 = time.perf_counter()
-            text, usage = complete_fn(model, messages)
+            text, usage = complete_fn(model, compact_messages(messages, context_budget_chars))
             guard.progress()
             on_result(usage, text, (time.perf_counter() - t0) * 1e3)
             return litellm.ModelResponse(

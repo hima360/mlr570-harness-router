@@ -24,7 +24,8 @@ from .worker import HarborEnvAdapter, run_worker
 
 CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "max_parallel",
                "max_plan_steps", "worker_step_limit", "cli_timeout_sec", "step_wall_time_sec", "step_idle_sec",
-               "max_observation_chars", "plan_from")
+               "max_observation_chars", "plan_from",
+               "fixer_model", "max_interventions", "context_budget_chars")
 
 
 class RoutedHarness(BaseAgent):
@@ -65,7 +66,13 @@ class RoutedHarness(BaseAgent):
                                   blackboard_text=blackboard_text, output_path=output_path,
                                   on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info))
 
-        orch = Orchestrator(self.cfg, ledger, trace, Router(self.cfg), ask_planner, work, logs)
+        def ask_fixer(messages):
+            with report_failures(lambda info: trace.log("llm_call_failed", role="fixer", **info)):
+                return chat(self.cfg, ledger, self.cfg.fixer_model, messages,
+                            on_call=lambda info: trace.log("llm_call", role="fixer", **info))
+
+        orch = Orchestrator(self.cfg, ledger, trace, Router(self.cfg), ask_planner, work, logs,
+                            ask_fixer=ask_fixer if self.cfg.fixer_model else None)
 
         def refresh(summary=None):
             ledger.fill_context(context)

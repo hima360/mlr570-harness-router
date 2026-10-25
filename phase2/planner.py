@@ -16,6 +16,7 @@ For each step give:
 - outputs: what later steps need from this step, each {{"name": "seed", "kind": "fact", "about": "DGA seed
   as 8 hex chars"}} or {{"name": "solver", "kind": "file", "path": "/app/solve.py", "about": "..."}}; [] if none
 - check: one shell command that exits 0 only if the step succeeded
+- effort: "low" only for steps that just assemble or write results other steps already found; omit otherwise
 
 Before chaining steps, ask what each step needs to know. If another step finds it (a key, a seed, a
 host, a decoded file), depend on that step and name it as one of that step's outputs. Steps that need
@@ -26,6 +27,10 @@ writable; do not list it in writes). Every step needs a real check: the verifier
 whether the step is done, and a failed check moves the step to a stronger model. A step that only
 investigates declares what it finds as fact outputs, and its check greps outputs.txt for the concrete
 value (for example grep -Eq '^seed=[0-9a-f]{{8}}$' /tmp/steps/s1/outputs.txt), not just that it exists.
+A check must fail for a plausible WRONG answer, not only a malformed one: recompute or cross-check the
+value against the source data (for example regenerate the observed domains from the seed, or decrypt a
+known sample with the key). A format-only check lets a wrong value flow into every later step.
+If the steps would only form a chain with no parallel work, prefer fewer, larger steps (2 or 3).
 
 Keep each step small enough for a modest model to finish in about 10 shell commands; split long
 investigations into separate steps. Steps that write overlapping files must depend on each other.
@@ -58,6 +63,7 @@ class Step(BaseModel):
     writes: list[str] = []
     outputs: list[Output] = []
     check: str = ""
+    effort: str = ""  # "low": the worker runs at low reasoning effort (assembling known results)
     # Set by the harness only (the short repair turn for missing outputs); not part of the plan.
     worker_step_limit: int | None = Field(default=None, exclude=True)
 
@@ -110,6 +116,26 @@ def topo_order(plan: Plan) -> list[str]:
             done.add(i)
             del deps[i]
     return order
+
+
+def plan_shape(plan: Plan) -> dict:
+    """How parallel the plan is, and dependencies whose goal and check never mention what they would
+    consume (a soft lint: logged, never rejected, since a missing edge costs more than a fake one)."""
+    from collections import Counter
+
+    byid = {s.id: s for s in plan.steps}
+    depth = {}
+    for sid in topo_order(plan):
+        depth[sid] = 1 + max((depth[d] for d in byid[sid].depends_on), default=0)
+    unjustified = []
+    for s in plan.steps:
+        text = f"{s.goal} {s.check}"
+        for d in s.depends_on:
+            names = [o.name for o in byid[d].outputs] + [o.path for o in byid[d].outputs if o.path]
+            if f"/tmp/steps/{d}" not in text and not any(n in text for n in names):
+                unjustified.append(f"{d}->{s.id}")
+    return {"parallelism": round(len(plan.steps) / max(depth.values()), 2),
+            "widest_layer": max(Counter(depth.values()).values()), "unjustified_edges": unjustified}
 
 
 def single_step_plan(instruction: str) -> Plan:

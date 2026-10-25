@@ -51,6 +51,13 @@ class HarnessConfig:
     # Path to an earlier run's trace.jsonl (or its trial / agent dir): reuse that plan instead of calling
     # the planner, so routing conditions are compared on the same DAG.
     plan_from: str = ""
+    # Error handler: one fresh call per failed step (no shell, picks one action from a fixed menu).
+    # "" = off: a failed step escalates once, as before. Capped at max_interventions per run.
+    fixer_model: str = ""
+    max_interventions: int = 2
+    # CLI workers: once a conversation outgrows this, older turns are folded into PROGRESS SO FAR.
+    # 0 = off. ~32k chars is ~11-13k tokens with CLI overhead (measured 2.7-3.3 chars/token).
+    context_budget_chars: int = 32000
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180
@@ -88,7 +95,7 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
             setattr(cfg, name, (int if f.type in (int, "int") else float)(value))
     from .droid import is_droid
 
-    missing = [m for m in cfg.tiers + [cfg.planner_model]
+    missing = [m for m in cfg.tiers + [cfg.planner_model] + ([cfg.fixer_model] if cfg.fixer_model else [])
                if not is_droid(m) and m not in cfg.prices_per_million]
     if missing:
         raise ValueError(f"no price for models: {missing}")

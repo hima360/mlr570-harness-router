@@ -4,23 +4,59 @@ All model-facing parts are injected so the whole flow runs under tests with fake
   ask_planner(messages) -> str
   work(step, model_id, blackboard_text, output_path) -> WorkerResult   (blocking; run in a thread)
   router.route(step_id, text) -> RouteDecision
+  ask_fixer(messages) -> str   (optional error handler; without it a failed step escalates once)
 """
 import asyncio
+import json
+import re
 from pathlib import Path
 
-from .blackboard import Blackboard
-from .planner import load_pinned_plan, make_plan, topo_order
+from .blackboard import Blackboard, facts_text
+from .planner import load_pinned_plan, make_plan, plan_shape, topo_order
 from .scheduler import run_dag
 from .verifier import Verdict, read_outputs, steps_dir, verify
 
 
 REPAIR_STEP_LIMIT = 4  # model calls for the missing-outputs repair turn: write the file, submit
+MAX_ATTEMPTS = 3  # per step: first try, one escalation, one more when the error handler asks for it
+
+FIXER_ACTIONS = ("rerun_dependency", "retry", "escalate", "stop")
+FIXER_PROMPT = """You are the error handler for a team of coding agents. A step failed. You do NOT do the work and
+you cannot run commands: read the incident and choose ONE recovery action for the harness to carry out.
+
+Reply with only one JSON object:
+- {"action": "rerun_dependency", "step": "<earlier step id>", "note": "<what looks wrong in its result and how
+  to verify it>"}: the failure comes from a wrong or missing result of an earlier step (a blocker note naming
+  it, or a value that contradicts the evidence). That step is re-run on a stronger model, then this step retries.
+- {"action": "retry", "note": "<one concrete hint>"}: the same model was close; a specific hint should fix it.
+- {"action": "escalate", "note": "<what the stronger model should know>"}: the step is too hard for this model.
+- {"action": "stop", "note": "<why>"}: nothing the team can do will fix it."""
+
+
+def parse_fix(reply: str, allowed_steps) -> dict:
+    """The handler's decision, held to the menu: anything else becomes a plain escalation."""
+    m = re.search(r"\{.*\}", reply or "", re.S)
+    try:
+        a = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        a = {}
+    note = str((a or {}).get("note", ""))[:1000] if isinstance(a, dict) else ""
+    if not isinstance(a, dict) or a.get("action") not in FIXER_ACTIONS:
+        return {"action": "escalate", "note": note, "invalid": True}
+    if a["action"] == "rerun_dependency":
+        if a.get("step") not in allowed_steps:
+            return {"action": "escalate", "note": note, "invalid": True}
+        return {"action": "rerun_dependency", "step": a["step"], "note": note}
+    return {"action": a["action"], "note": note}
 
 
 class Orchestrator:
-    def __init__(self, cfg, ledger, trace, router, ask_planner, work, logs_dir: Path | None = None):
+    def __init__(self, cfg, ledger, trace, router, ask_planner, work, logs_dir: Path | None = None,
+                 ask_fixer=None):
         self.cfg, self.ledger, self.trace, self.router = cfg, ledger, trace, router
-        self.ask_planner, self.work = ask_planner, work
+        self.ask_planner, self.work, self.ask_fixer = ask_planner, work, ask_fixer
+        self.interventions = 0
+        self.steps, self.records = {}, {}
         self.logs_dir = logs_dir
         self.on_progress = lambda: None  # agent.py refreshes the Harbor context here
 
@@ -33,7 +69,8 @@ class Orchestrator:
             plan, plan_info = await asyncio.to_thread(
                 make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
         self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan),
-                       planner_model=self.cfg.planner_model, **plan_info)
+                       planner_model=self.cfg.planner_model, **plan_shape(plan), **plan_info)
+        self.steps = {s.id: s for s in plan.steps}
         bb = Blackboard(task=instruction)
         for s in plan.steps:
             bb.add(s.id, s.goal)
@@ -50,9 +87,11 @@ class Orchestrator:
             "steps": results,
             "n_escalations": sum(r["escalations"] for r in results.values()),
             "n_failed_steps": sum(1 for r in results.values() if not r["passed"]),
+            "n_interventions": self.interventions,
             "policy": self.cfg.policy,
         }
-        self.trace.log("done", **{k: summary[k] for k in ("n_escalations", "n_failed_steps", "policy")})
+        self.trace.log("done", **{k: summary[k] for k in ("n_escalations", "n_failed_steps", "n_interventions",
+                                                          "policy")})
         return summary
 
     async def _env_summary(self, environment) -> str:
@@ -65,49 +104,137 @@ class Orchestrator:
     async def _run_step(self, step, instruction, environment, bb) -> dict:
         decision = self.router.route(step.id, step.goal)
         self.trace.log("route", step=step.id, model=self.cfg.tiers[decision.tier], **decision.to_dict())
-        tier = decision.tier
-        record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False}
-        handoff = ""
+        record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False,
+                  "tier": decision.tier}
+        self.records[step.id] = record
         try:
             await environment.exec(f"mkdir -p {steps_dir(step.id)}", timeout_sec=30)
         except Exception:
             pass  # the worker can still create it; read_outputs copes with a missing file
-        for attempt in range(2):  # first try + one escalated retry
-            model_id = self.cfg.tiers[tier]
-            bb.update(step.id, status="running", tier=tier, model=model_id, attempts=attempt + 1)
-            out_path = (self.logs_dir / f"worker_{step.id}_a{attempt + 1}.json") if self.logs_dir else None
-            team = bb.summary_for(step.id, step.depends_on)
-            result = await asyncio.to_thread(self.work, step, model_id, team + handoff, out_path)
-            outputs, missing = await read_outputs(environment, step)
-            if missing and result.exit_status == "Submitted":
-                result, outputs, missing = await self._repair_outputs(
-                    step, model_id, team, environment, result, missing, out_path)
-            verdict = await verify(environment, step, result.exit_status, self.cfg.check_timeout)
-            if missing:  # promised results that later steps rely on are part of passing
-                verdict = Verdict(False, f"missing declared outputs: {', '.join(missing)}\n{verdict.output}")
-            self.trace.log("attempt", step=step.id, attempt=attempt + 1, tier=tier, model=model_id,
-                           exit_status=result.exit_status, n_calls=result.n_calls, passed=verdict.passed,
-                           check=step.check, check_output=verdict.output[-500:], summary=result.summary[:300],
-                           outputs={k: v[:200] for k, v in outputs.items()}, missing_outputs=missing)
-            record["attempts"].append({"tier": tier, "model": model_id, "exit_status": result.exit_status,
-                                       "passed": verdict.passed, "n_calls": result.n_calls})
-            bb.update(step.id, summary=result.summary, check_output=verdict.output[-500:], outputs=outputs)
-            self.on_progress()
+        handoff = ""
+        while True:
+            result, verdict, out_path = await self._attempt(step, record, handoff, environment, bb)
             if verdict.passed:
                 record["passed"] = True
                 break
-            if attempt == 0 and tier < len(self.cfg.tiers) - 1:
-                record["escalations"] += 1
-                self.trace.log("escalate", step=step.id, from_tier=tier, to_tier=tier + 1, router_error=True)
-                handoff = self._handoff(out_path, model_id, result.exit_status, verdict.output)
-                if handoff:
-                    self.trace.log("handoff", step=step.id, from_model=model_id, to_model=self.cfg.tiers[tier + 1],
-                                   chars=len(handoff))
-                tier += 1
-            else:
+            if len(record["attempts"]) >= MAX_ATTEMPTS:
                 break
+            action = await self._triage(step, record, result, verdict, out_path, instruction, bb)
+            kind, note = action["action"], action.get("note", "")
+            model_id = self.cfg.tiers[record["tier"]]
+            notes = self._handoff(out_path, model_id, result.exit_status, verdict.output)
+            hint = f"\nThe error handler's note: {note}" if note else ""
+            if kind == "stop":
+                break
+            if kind == "rerun_dependency":
+                if await self._rerun(self.steps[action["step"]], note, environment, bb):
+                    handoff = (f"\n\nEarlier step {action['step']} was re-run because: {note}\n"
+                               f"Its corrected results are in the team status above.{notes}")
+                    continue
+                kind = "escalate"  # the earlier step could not be fixed: fall back
+            if kind == "retry":
+                handoff = notes + hint
+                continue
+            if record["escalations"] or record["tier"] >= len(self.cfg.tiers) - 1:
+                break
+            record["escalations"] += 1
+            self.trace.log("escalate", step=step.id, from_tier=record["tier"], to_tier=record["tier"] + 1,
+                           router_error=True)
+            handoff = notes + hint
+            if handoff:
+                self.trace.log("handoff", step=step.id, from_model=model_id,
+                               to_model=self.cfg.tiers[record["tier"] + 1], chars=len(handoff))
+            record["tier"] += 1
         bb.update(step.id, status="done" if record["passed"] else "failed")
         return record
+
+    async def _attempt(self, step, record, handoff, environment, bb):
+        """One worker attempt at the record's current tier: work, collect outputs (with one repair turn
+        for missing ones), run the check, log it."""
+        tier, n = record["tier"], len(record["attempts"]) + 1
+        model_id = self.cfg.tiers[tier]
+        bb.update(step.id, status="running", tier=tier, model=model_id, attempts=n)
+        out_path = (self.logs_dir / f"worker_{step.id}_a{n}.json") if self.logs_dir else None
+        team = bb.summary_for(step.id, step.depends_on)
+        result = await asyncio.to_thread(self.work, step, model_id, team + handoff, out_path)
+        outputs, missing = await read_outputs(environment, step)
+        if missing and result.exit_status == "Submitted":
+            result, outputs, missing = await self._repair_outputs(
+                step, model_id, team, environment, result, missing, out_path)
+        verdict = await verify(environment, step, result.exit_status, self.cfg.check_timeout)
+        if missing:  # promised results that later steps rely on are part of passing
+            verdict = Verdict(False, f"missing declared outputs: {', '.join(missing)}\n{verdict.output}")
+        self.trace.log("attempt", step=step.id, attempt=n, tier=tier, model=model_id,
+                       exit_status=result.exit_status, n_calls=result.n_calls, passed=verdict.passed,
+                       check=step.check, check_output=verdict.output[-500:], summary=result.summary[:300],
+                       outputs={k: v[:200] for k, v in outputs.items()}, missing_outputs=missing)
+        record["attempts"].append({"tier": tier, "model": model_id, "exit_status": result.exit_status,
+                                   "passed": verdict.passed, "n_calls": result.n_calls})
+        bb.update(step.id, summary=result.summary, check_output=verdict.output[-500:], outputs=outputs)
+        self.on_progress()
+        return result, verdict, out_path
+
+    def _ancestors(self, step_id: str) -> list[str]:
+        seen, todo = [], list(self.steps[step_id].depends_on) if step_id in self.steps else []
+        while todo:
+            d = todo.pop()
+            if d not in seen and d in self.steps:
+                seen.append(d)
+                todo += self.steps[d].depends_on
+        return seen
+
+    async def _triage(self, step, record, result, verdict, out_path, instruction, bb) -> dict:
+        """One fresh error-handler call (no shell, no memory between calls), within the run's budget."""
+        if not self.ask_fixer or self.interventions >= self.cfg.max_interventions:
+            return {"action": "escalate"}
+        self.interventions += 1
+        ran = [d for d in self._ancestors(step.id) if d in self.records]
+        prompt = self._incident(step, record, result, verdict, out_path, instruction, bb, ran)
+        try:
+            reply = await asyncio.to_thread(self.ask_fixer, [{"role": "user", "content": prompt}])
+            action = parse_fix(reply, ran)
+        except Exception as e:
+            action = {"action": "escalate", "note": "", "error": str(e)[:300]}
+        self.trace.log("triage", step=step.id, n=self.interventions, **action)
+        return action
+
+    def _incident(self, step, record, result, verdict, out_path, instruction, bb, ran) -> str:
+        from .worker import attempt_digest
+
+        try:
+            messages = json.loads(out_path.read_text()).get("messages", []) if out_path else []
+        except (OSError, ValueError):
+            messages = []
+        own = bb.entries[step.id]
+        lines = [FIXER_PROMPT, "", "TASK:", instruction[:1500], "",
+                 f"FAILED STEP {step.id} (attempt {len(record['attempts'])} on {own.model}, ended: {result.exit_status})",
+                 f"goal: {step.goal}", f"check: {step.check or '(none)'}",
+                 f"check output: {verdict.output.strip()[-800:] or '(empty)'}",
+                 f"its report: {result.summary[:400] or '(none)'}",
+                 f"its published results: {facts_text(step.id, own.outputs, 1500) or '(none)'}", "",
+                 "EARLIER STEPS IT BUILDS ON:" if ran else "It builds on no earlier step."]
+        for d in ran:
+            e = bb.entries[d]
+            lines.append(f"- {d} [{e.status}, {e.model}] {e.goal[:200]}\n  results: "
+                         f"{facts_text(d, e.outputs, 800) or '(none)'}")
+        digest = attempt_digest(messages, max_chars=2500)
+        if digest:
+            lines += ["", "WHAT THE FAILED ATTEMPT DID (newest last):", digest]
+        return "\n".join(lines)
+
+    async def _rerun(self, dep, note, environment, bb) -> bool:
+        """Re-open a finished earlier step one tier up, told what a later step found wrong."""
+        rec = self.records[dep.id]
+        rec["tier"] = min(rec["tier"] + 1, len(self.cfg.tiers) - 1)
+        self.trace.log("rerun", step=dep.id, tier=rec["tier"], model=self.cfg.tiers[rec["tier"]],
+                       note=note[:500], router_error=True)
+        handoff = (f"\n\nYour step was finished before, but a later step found a problem with its result: {note}\n"
+                   f"Verify against the source data and correct it: append the corrected name=value lines to "
+                   f"{steps_dir(dep.id)}/outputs.txt (later lines win).")
+        _, verdict, _ = await self._attempt(dep, rec, handoff, environment, bb)
+        rec["passed"] = verdict.passed
+        bb.update(dep.id, status="done" if verdict.passed else "failed")
+        return verdict.passed
 
     async def _repair_outputs(self, step, model_id, team, environment, result, missing, out_path):
         """The worker submitted without publishing what the plan promised: one short turn on the same

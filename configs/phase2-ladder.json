@@ -7,6 +7,7 @@
     "droid/gpt-6.1-sol"
   ],
   "planner_model": "claude/claude-opus-5-5",
+  "fixer_model": "claude/claude-opus-5-5",
   "policy": "cascade",
   "confidence_threshold": 0.35,
   "base_url": "http://127.0.0.1:10100/v1",

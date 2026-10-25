@@ -44,11 +44,11 @@ class Blackboard:
                 head = f"- {sid} [{e.status}]{' (your step needs this)' if dep else ''} {e.goal[:200]}"
                 where = f"/tmp/steps/{sid}/"
                 if dep and e.status == "failed":
-                    facts = f"; partial results: {_facts(sid, e.outputs, 2000)}" if e.outputs else ""
+                    facts = f"; partial results: {facts_text(sid, e.outputs, 2000)}" if e.outputs else ""
                     lines.append(f"{head}\n  It FAILED, so produce what your step needs from it yourself{facts}. "
                                  f"Its notes: {where} . Last report: {e.summary[:300] or '(none)'}")
                 elif e.outputs:
-                    lines.append(f"{head}\n  results: {_facts(sid, e.outputs, 2000 if dep else 400)}")
+                    lines.append(f"{head}\n  results: {facts_text(sid, e.outputs, 2000 if dep else 400)}")
                 elif dep and e.status == "done":
                     note = f" Its report: {e.summary[:300]}" if e.summary else ""
                     lines.append(f"{head}\n  It published no facts; look in {where} and the files it wrote.{note}")
@@ -65,7 +65,7 @@ class Blackboard:
         path.write_text(json.dumps(self.to_dict(), indent=2))
 
 
-def _facts(step_id: str, outputs: dict, cap: int) -> str:
+def facts_text(step_id: str, outputs: dict, cap: int) -> str:
     """name=value pairs up to `cap` chars; the rest stays on disk and the text says where."""
     parts, size = [], 0
     for name, value in outputs.items():

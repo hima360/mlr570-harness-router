@@ -46,6 +46,8 @@ def outputs_hint(step) -> str:
             f"- {o.name}: {o.about or 'see your step'}\n" for o in facts)
     else:
         text += "Publish any fact a later step may need (a key, a value, a path you found).\n"
+    text += ("If you cannot finish because an earlier step's result looks wrong, publish "
+             "blocker=<that step's id>: <what is wrong and why> and submit, instead of working around it.\n")
     if files:
         text += "Your step must create these files:\n" + "".join(
             f"- {o.path}: {o.about or o.name}\n" for o in files)
@@ -113,7 +115,7 @@ your_command_here
 ```"""
 
 
-def _make_model(cfg, ledger, model_id: str, on_call=None):
+def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None):
     import time
 
     from minisweagent.models.litellm_model import LitellmModel
@@ -127,8 +129,13 @@ def _make_model(cfg, ledger, model_id: str, on_call=None):
             on_call(info)
 
     if complete_fn_for(model_id) is not None:
-        return make_text_model(model_id, on_result, complete_fn=complete_fn_for(model_id, cfg),
-                               idle_sec=cfg.step_idle_sec)
+        complete = complete_fn_for(model_id, cfg)
+        if effort:  # the plan marked this step as light work
+            import functools
+
+            complete = functools.partial(complete_fn_for(model_id), effort=effort, timeout=cfg.cli_timeout_sec)
+        return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
+                               context_budget_chars=cfg.context_budget_chars)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):
@@ -160,7 +167,7 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
 
     from .cli_models import complete_fn_for
 
-    model = model or _make_model(cfg, ledger, model_id, on_call)
+    model = model or _make_model(cfg, ledger, model_id, on_call, effort="low" if step.effort == "low" else None)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""
@@ -208,3 +215,50 @@ def attempt_digest(messages: list[dict], max_chars: int = 5000) -> str:
         kept.append(part)
         size += len(part)
     return "".join(reversed(kept))
+
+
+PROGRESS_CHARS = 4000
+
+
+def compact_messages(messages: list[dict], budget_chars: int) -> list[dict]:
+    """The view a CLI model gets once the conversation outgrows `budget_chars`: system and first prompt
+    pinned, older turns folded into one PROGRESS SO FAR block (command and start of its output), the
+    newest turns verbatim. mini-swe-agent's own history (saved for the trace and the handoff) is untouched."""
+    import re
+
+    def size(m):
+        return len(str(m.get("content") or ""))
+
+    if budget_chars <= 0 or len(messages) <= 4 or sum(map(size, messages)) <= budget_chars:
+        return messages
+    head, rest = messages[:2], messages[2:]
+    keep, room = 0, budget_chars - sum(map(size, head)) - PROGRESS_CHARS
+    for m in reversed(rest):
+        if keep and size(m) > room:
+            break
+        room -= size(m)
+        keep += 1
+    keep = min(max(keep, 2), len(rest))
+    if keep < len(rest) and rest[-keep].get("role") != "assistant":
+        keep += 1  # the verbatim part starts with a model turn
+    if keep >= len(rest):
+        return messages
+    old, lines = rest[:-keep], []
+    for i, m in enumerate(old):
+        if m.get("role") != "assistant":
+            continue
+        text = str(m.get("content") or "")
+        cmd = re.search(r"```mswea_bash_command\s*(.*?)```", text, re.S)
+        nxt = old[i + 1] if i + 1 < len(old) else {}
+        out = " ".join(str(nxt.get("content") or "").split())[:160] if nxt.get("role") != "assistant" else ""
+        lines.append(f"- ran: {' '.join((cmd.group(1) if cmd else text).split())[:200]}\n  got: {out}")
+    kept, total = [], 0
+    for line in reversed(lines):
+        if total + len(line) > PROGRESS_CHARS - 200:
+            kept.append("- (earlier turns omitted)")
+            break
+        kept.append(line)
+        total += len(line) + 1
+    progress = ("\n\nPROGRESS SO FAR (your older turns, folded to save space; the files you wrote and "
+                "/tmp/steps/ are unchanged):\n" + "\n".join(reversed(kept)))
+    return [head[0], {**head[1], "content": str(head[1].get("content") or "") + progress}, *rest[-keep:]]
