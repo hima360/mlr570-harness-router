@@ -1,6 +1,7 @@
 """Planner: one frontier-model call turns the task into a validated DAG of steps."""
 import json
 import re
+from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -12,12 +13,19 @@ For each step give:
 - goal: what this step must achieve, self-contained, specific enough to act on alone
 - depends_on: ids of steps that must finish first
 - writes: file paths or globs this step may create or modify ([] if it only reads)
+- outputs: what later steps need from this step, each {{"name": "seed", "kind": "fact", "about": "DGA seed
+  as 8 hex chars"}} or {{"name": "solver", "kind": "file", "path": "/app/solve.py", "about": "..."}}; [] if none
 - check: one shell command that exits 0 only if the step succeeded
 
-Every step needs a real check: the verifier runs it to decide whether the step is done, and a failed
-check moves the step to a stronger model. A step that only investigates must write its findings to
-/tmp/steps/<id>.txt (list that path in writes), and its check confirms the file holds the concrete
-result (for example a grep for the value found), not just that the file exists.
+Before chaining steps, ask what each step needs to know. If another step finds it (a key, a seed, a
+host, a decoded file), depend on that step and name it as one of that step's outputs. Steps that need
+nothing from each other get no dependency, so they run at the same time.
+
+Each step writes its facts as name=value lines to /tmp/steps/<id>/outputs.txt (that folder is always
+writable; do not list it in writes). Every step needs a real check: the verifier runs it to decide
+whether the step is done, and a failed check moves the step to a stronger model. A step that only
+investigates declares what it finds as fact outputs, and its check greps outputs.txt for the concrete
+value (for example grep -Eq '^seed=[0-9a-f]{{8}}$' /tmp/steps/s1/outputs.txt), not just that it exists.
 
 Keep each step small enough for a modest model to finish in about 10 shell commands; split long
 investigations into separate steps. Steps that write overlapping files must depend on each other.
@@ -29,10 +37,18 @@ Task:
 Current directory listing:
 {env_summary}
 
-Reply with only JSON: {{"steps": [{{"id": "...", "goal": "...", "depends_on": [], "writes": [], "check": ""}}]}}"""
+Reply with only JSON: {{"steps": [{{"id": "...", "goal": "...", "depends_on": [], "writes": [], "outputs": [], "check": ""}}]}}"""
 
 REPAIR_PROMPT = """Your plan was rejected: {error}
 Reply with only the corrected JSON plan in the same format."""
+
+
+class Output(BaseModel):
+    """A result a step promises: a fact (name=value line in /tmp/steps/<id>/outputs.txt) or a file."""
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+    kind: Literal["fact", "file"] = "fact"
+    about: str = ""
+    path: str = ""
 
 
 class Step(BaseModel):
@@ -40,7 +56,10 @@ class Step(BaseModel):
     goal: str = Field(min_length=1)
     depends_on: list[str] = []
     writes: list[str] = []
+    outputs: list[Output] = []
     check: str = ""
+    # Set by the harness only (the short repair turn for missing outputs); not part of the plan.
+    worker_step_limit: int | None = Field(default=None, exclude=True)
 
 
 class Plan(BaseModel):
@@ -69,6 +88,12 @@ def parse_plan(text: str, max_steps: int) -> Plan:
         unknown = set(s.depends_on) - set(ids)
         if unknown:
             raise PlanError(f"step {s.id} depends on unknown steps {sorted(unknown)}")
+        names = [o.name for o in s.outputs]
+        if len(set(names)) != len(names):
+            raise PlanError(f"step {s.id} has duplicate output names")
+        nopath = [o.name for o in s.outputs if o.kind == "file" and not o.path.strip()]
+        if nopath:
+            raise PlanError(f"step {s.id} file outputs need a path: {nopath}")
     topo_order(plan)
     return plan
 

@@ -29,6 +29,12 @@ def render(trace_path: Path) -> str:
             mark = "PASS" if e["passed"] else "FAIL"
             out.append(f"[{e['t']:7.2f}s] {mark} {e['step']} attempt {e['attempt']} on {e['model']} "
                        f"({e['n_calls']} calls, {e['exit_status']})")
+            if e.get("outputs"):
+                out.append("           published: " + "; ".join(f"{k}={_short(v, 60)}" for k, v in e["outputs"].items()))
+            if e.get("missing_outputs"):
+                out.append("           missing outputs: " + ", ".join(e["missing_outputs"]))
+        elif ev == "outputs_repair":
+            out.append(f"[{e['t']:7.2f}s] REPAIR {e['step']} on {e['model']}: write missing {', '.join(e['missing'])}")
         elif ev == "llm_call_failed":
             retry = ", retrying" if e.get("will_retry") else ""
             out.append(f"[{e['t']:7.2f}s] CALL FAILED {e.get('role')} {e.get('step', '')} {e.get('model')} "

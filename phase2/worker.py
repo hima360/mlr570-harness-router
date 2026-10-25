@@ -21,13 +21,35 @@ Other steps and what they reported:
 {{blackboard}}
 
 Do only your step. Other agents may work on other files at the same time, so only edit files
-your step needs{{writes_hint}}.
+your step needs{{writes_hint}}.{{outputs_hint}}
 
 Every response must contain exactly one bash command. Each command runs in a fresh shell in the
 task container, so prefix with `cd /path && ...` when needed.{{format_hint}}
 When your step is done, run exactly:
 printf '""" + SUBMIT + """\\n<one or two sentences on what you did and which files changed>\\n'
 """
+
+
+def outputs_hint(step) -> str:
+    """How to publish results: name=value lines in the step's outputs.txt, via a quoted heredoc (no
+    printf quoting or % pitfalls), plus the facts and files the plan promised."""
+    from .verifier import steps_dir
+
+    d = steps_dir(step.id)
+    facts = [o for o in step.outputs if o.kind == "fact"]
+    files = [o for o in step.outputs if o.kind == "file"]
+    text = (f"\n\nYour folder {d}/ is always writable: keep notes there. Publish results for the team as "
+            f"name=value lines in {d}/outputs.txt, written with a quoted heredoc, for example:\n"
+            f"cat >> {d}/outputs.txt <<'EOF'\nname=value\nEOF\n")
+    if facts:
+        text += "Your step must publish these facts:\n" + "".join(
+            f"- {o.name}: {o.about or 'see your step'}\n" for o in facts)
+    else:
+        text += "Publish any fact a later step may need (a key, a value, a path you found).\n"
+    if files:
+        text += "Your step must create these files:\n" + "".join(
+            f"- {o.path}: {o.about or o.name}\n" for o in files)
+    return text.rstrip("\n")
 
 
 @dataclass
@@ -146,13 +168,13 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
         model, env_adapter,
         system_template="You are a careful software engineer operating a Linux shell.",
         instance_template=INSTANCE_TEMPLATE,
-        step_limit=cfg.worker_step_limit, cost_limit=0, output_path=output_path,
+        step_limit=step.worker_step_limit or cfg.worker_step_limit, cost_limit=0, output_path=output_path,
         wall_time_limit_seconds=cfg.step_wall_time_sec,
     )
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,
                          blackboard=blackboard_text, writes_hint=writes_hint,
-                         format_hint=format_hint) or {}
+                         outputs_hint=outputs_hint(step), format_hint=format_hint) or {}
     except Exception as e:
         return WorkerResult(type(e).__name__, str(e)[:500], agent.n_calls)
     return WorkerResult(info.get("exit_status", "unknown"), (info.get("submission") or "").strip(),

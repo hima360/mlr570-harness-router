@@ -11,7 +11,10 @@ from pathlib import Path
 from .blackboard import Blackboard
 from .planner import load_pinned_plan, make_plan, topo_order
 from .scheduler import run_dag
-from .verifier import verify
+from .verifier import Verdict, read_outputs, steps_dir, verify
+
+
+REPAIR_STEP_LIMIT = 4  # model calls for the missing-outputs repair turn: write the file, submit
 
 
 class Orchestrator:
@@ -65,18 +68,30 @@ class Orchestrator:
         tier = decision.tier
         record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False}
         handoff = ""
+        try:
+            await environment.exec(f"mkdir -p {steps_dir(step.id)}", timeout_sec=30)
+        except Exception:
+            pass  # the worker can still create it; read_outputs copes with a missing file
         for attempt in range(2):  # first try + one escalated retry
             model_id = self.cfg.tiers[tier]
             bb.update(step.id, status="running", tier=tier, model=model_id, attempts=attempt + 1)
             out_path = (self.logs_dir / f"worker_{step.id}_a{attempt + 1}.json") if self.logs_dir else None
-            result = await asyncio.to_thread(self.work, step, model_id, bb.summary_for(step.id) + handoff, out_path)
+            team = bb.summary_for(step.id, step.depends_on)
+            result = await asyncio.to_thread(self.work, step, model_id, team + handoff, out_path)
+            outputs, missing = await read_outputs(environment, step)
+            if missing and result.exit_status == "Submitted":
+                result, outputs, missing = await self._repair_outputs(
+                    step, model_id, team, environment, result, missing, out_path)
             verdict = await verify(environment, step, result.exit_status, self.cfg.check_timeout)
+            if missing:  # promised results that later steps rely on are part of passing
+                verdict = Verdict(False, f"missing declared outputs: {', '.join(missing)}\n{verdict.output}")
             self.trace.log("attempt", step=step.id, attempt=attempt + 1, tier=tier, model=model_id,
                            exit_status=result.exit_status, n_calls=result.n_calls, passed=verdict.passed,
-                           check=step.check, check_output=verdict.output[-500:], summary=result.summary[:300])
+                           check=step.check, check_output=verdict.output[-500:], summary=result.summary[:300],
+                           outputs={k: v[:200] for k, v in outputs.items()}, missing_outputs=missing)
             record["attempts"].append({"tier": tier, "model": model_id, "exit_status": result.exit_status,
                                        "passed": verdict.passed, "n_calls": result.n_calls})
-            bb.update(step.id, summary=result.summary, check_output=verdict.output[-500:])
+            bb.update(step.id, summary=result.summary, check_output=verdict.output[-500:], outputs=outputs)
             self.on_progress()
             if verdict.passed:
                 record["passed"] = True
@@ -93,6 +108,21 @@ class Orchestrator:
                 break
         bb.update(step.id, status="done" if record["passed"] else "failed")
         return record
+
+    async def _repair_outputs(self, step, model_id, team, environment, result, missing, out_path):
+        """The worker submitted without publishing what the plan promised: one short turn on the same
+        model to write them, so a format slip is not counted as a routing error."""
+        self.trace.log("outputs_repair", step=step.id, model=model_id, missing=missing)
+        fix = step.model_copy(update={"worker_step_limit": REPAIR_STEP_LIMIT, "goal": (
+            f"Your step is already done ({step.goal[:600]}). It has NOT yet published these results: "
+            f"{', '.join(missing)}. Write them now as described below (find the values in your earlier work, "
+            f"the files you wrote and {steps_dir(step.id)}/), then submit. Do not redo the step.")})
+        path = out_path.with_name(out_path.stem + "_repair.json") if out_path else None
+        fixed = await asyncio.to_thread(self.work, fix, model_id, team, path)
+        outputs, still = await read_outputs(environment, step)
+        self.trace.log("outputs_repaired", step=step.id, model=model_id, missing=still, n_calls=fixed.n_calls)
+        merged = type(result)(result.exit_status, result.summary, result.n_calls + fixed.n_calls)
+        return merged, outputs, still
 
     @staticmethod
     def _handoff(out_path: Path | None, model_id: str, exit_status: str, check_output: str) -> str:

@@ -1,6 +1,6 @@
 # Coordination and memory upgrade: design
 
-Status: proposed, not built (2026-10-25). Applies to `phase2/` on branch `phase2/plan`.
+Status: partly built (2026-10-25); see "Built" under the revision. Applies to `phase2/` on branch `phase2/plan`.
 
 ## Goal
 
@@ -41,6 +41,9 @@ edge, not a fake one. Agreed changes:
 
 Not adopted now: a per-backend concurrency limit (one sample of simultaneous timeouts; revisit if
 it repeats) and a forced setup step for installs (the planner cannot know installs up front).
+
+**Built (2026-10-25):** R9 plan pinning and R7 timeout escalation (commit 8a41768); R2 outputs.txt with
+a repair turn and R3 fact-based team status, plus R1's planner-prompt rule (soft lint not built yet).
 
 **Revised build order:** R9 plan pinning and R7 timeout escalation (small, unblock fair runs) ->
 R2 outputs.txt + R3 fact-based context -> R5/R6 compaction and handoff -> R8 cancel and re-check ->
