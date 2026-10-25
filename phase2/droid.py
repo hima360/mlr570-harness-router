@@ -9,7 +9,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from .cli_models import openai_usage, run_cli, run_group, serialize
+from .cli_models import RETRY_NOTE, openai_usage, run_cli, run_group, serialize
 
 PREFIX = "droid/"
 APP_DROID = "/Applications/Factory.app/Contents/Resources/bin/droid"
@@ -37,7 +37,11 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
         # Grep, WebSearch and FetchUrl run on the host, outside the harness and the task container.
         argv = [droid_bin(), "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
                 "--only-tools", "TodoWrite", "-f", str(prompt)] + (["-r", effort] if effort else [])
+        def retry():
+            prompt.write_text(serialize(messages + [{"role": "user", "content": RETRY_NOTE}]))
+            return run(argv, cwd=d, capture_output=True, text=True, timeout=timeout)
+
         result = run_cli(lambda: run(argv, cwd=d, capture_output=True, text=True, timeout=timeout),
-                         "droid exec", model=model)
+                         "droid exec", model=model, retry_call=retry)
     u = result.get("usage") or {}
     return result.get("result") or "", openai_usage(u, factory_credits=u.get("factory_credits"))

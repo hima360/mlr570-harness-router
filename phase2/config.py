@@ -60,6 +60,8 @@ class HarnessConfig:
     context_budget_chars: int = 32000
     # claude/ workers: CLAUDE_CODE_MAX_OUTPUT_TOKENS per call (0 = CLI default). Droid has no such flag.
     max_output_tokens: int = 8000
+    # Submit gate: times per attempt a submit is sent back because the step's check failed (0 = off).
+    submit_checks: int = 2
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180

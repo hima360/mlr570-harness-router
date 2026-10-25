@@ -7,7 +7,7 @@ system prompt instead of Claude Code's, which keeps the per-call overhead small.
 import os
 import tempfile
 
-from .cli_models import PROMPT_HEADER, openai_usage, run_cli, run_group, serialize
+from .cli_models import PROMPT_HEADER, RETRY_NOTE, openai_usage, run_cli, run_group, serialize
 
 PREFIX = "claude/"
 
@@ -34,8 +34,13 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
         argv = ["claude", "-p", "--model", model_id, "--output-format", "json", "--tools", "",
                 "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
                 "--system-prompt", (PROMPT_HEADER + system).strip()] + (["--effort", effort] if effort else [])
-        result = run_cli(lambda: run(argv, input=serialize(rest, header=""), cwd=d, env=env,
-                                     capture_output=True, text=True, timeout=timeout), "claude -p",
-                         model=model)
-    return result.get("result") or "", openai_usage(result.get("usage") or {},
-                                                    claude_code_cost_usd=result.get("total_cost_usd"))
+        def call(extra=()):
+            return run(argv, input=serialize(rest + list(extra), header=""), cwd=d, env=env,
+                       capture_output=True, text=True, timeout=timeout)
+
+        result = run_cli(call, "claude -p", model=model,
+                         retry_call=lambda: call([{"role": "user", "content": RETRY_NOTE}]))
+    usage = openai_usage(result.get("usage") or {}, claude_code_cost_usd=result.get("total_cost_usd"))
+    if result.get("stop_reason") == "max_tokens":
+        usage["truncated"] = True
+    return result.get("result") or "", usage

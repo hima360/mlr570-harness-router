@@ -14,7 +14,7 @@ from phase2.config import load_config
 from phase2.ledger import Ledger
 from phase2.planner import Step
 from phase2.router import Router
-from phase2.worker import SUBMIT, HarborEnvAdapter, run_worker
+from phase2.worker import SUBMIT, HarborEnvAdapter, bounded, run_worker
 from tests.fakes import FakeEnvironment, FakeScorer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,7 +131,7 @@ def test_worker_with_cli_text_model(model_id, capfd):
 
     res = asyncio.run(main())
     assert res.exit_status == "Submitted" and res.summary == "wrote hello.txt" and res.n_calls == 2
-    assert env.commands[0] == "echo hello > /app/hello.txt"
+    assert env.commands[0] == bounded("echo hello > /app/hello.txt", 30)
     assert "mswea_bash_command" in prompts[0][-1]["content"]
     assert led.by_model[model_id].factory_credits == 840 and led.totals().calls == 2
     assert "Provider List" not in "".join(capfd.readouterr())  # no litellm pricing lookups for CLI ids
@@ -323,7 +323,7 @@ def test_long_command_output_is_clipped():
         return await asyncio.to_thread(adapter.execute, {"command": "cat big"})  # sync API, worker thread
 
     out = asyncio.run(main())["output"]
-    assert out.startswith("A" * 500) and out.endswith("B" * 500) and "11000 characters elided" in out
+    assert out.startswith("A" * 500) and out.endswith("B" * 500) and "elided" in out
     assert clip_output("short", 1000) == "short" and clip_output("x" * 50, 0) == "x" * 50
 
 
@@ -505,3 +505,100 @@ def test_one_timeout_then_reply_keeps_going():
 
     text, _ = droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}], run=stalls_once)
     assert text == "ok" and not issubclass(cli_models.ModelTimedOut, cli_models.ProviderUnavailable)
+
+
+# ---------- practices from Claude Code / Droid / oh-my-pi / Terminus ----------
+
+def test_guard_reply_cuts_invented_turns_and_extra_commands():
+    from phase2.cli_models import guard_reply
+
+    one = "THOUGHT: x\n```mswea_bash_command\nls\n```"
+    assert guard_reply(one) == (one, "")
+    text, why = guard_reply(one + "\n### USER\n<returncode>0</returncode>\n```mswea_bash_command\nrm -rf /\n```")
+    assert text == one and why == "invented_turn"
+    text, why = guard_reply(one + "\nthen\n```mswea_bash_command\npwd\n```")
+    assert text == one and why == "2_commands"
+
+
+def test_timeout_retry_tells_the_model_to_be_shorter():
+    from phase2 import claude_code
+    from phase2.cli_models import RETRY_NOTE
+
+    inputs = []
+
+    def run(argv, input=None, timeout=None, **kw):
+        inputs.append(input)
+        if len(inputs) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+
+    text, _ = claude_code.complete("claude/claude-haiku-5-5", [{"role": "user", "content": "x"}], run=run)
+    assert text == "ok" and RETRY_NOTE not in inputs[0] and RETRY_NOTE in inputs[1]
+
+
+def test_reply_cut_at_output_limit_runs_nothing():
+    from phase2 import cli_models
+
+    model = cli_models.make_text_model(
+        "claude/claude-haiku-5-5", lambda *a: None,
+        complete_fn=lambda m, msgs: ("THOUGHT: long\n```mswea_bash_command\nrm -rf /app\n```",
+                                     {"prompt_tokens": 1, "completion_tokens": 8000, "truncated": True}))
+    out = model._query([{"role": "user", "content": "go"}])
+    assert "mswea_bash_command" not in out.choices[0].message.content
+
+
+def test_reminder_and_soft_budget_reach_the_newest_message():
+    from phase2 import cli_models
+
+    seen = []
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, reminder="STEP s1",
+                                       step_limit=7, complete_fn=lambda m, msgs: seen.append(msgs) or ("x", {"prompt_tokens": 1, "completion_tokens": 1}))
+    model._query([{"role": "user", "content": "go"}])
+    assert seen[0][-1]["content"].endswith("[Reminder] STEP s1")
+    model._query([{"role": "user", "content": "go"}])
+    assert "actions left" in seen[1][-1]["content"]
+
+
+def test_submit_gate_sends_a_failed_check_back_once_then_accepts():
+    from phase2.planner import Step
+    from phase2.worker import SubmitGate
+
+    state = {"check": 1}
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\ndone\n", 0) if SUBMIT in cmd else
+                          ("value wrong", state["check"]) if "check-s1" in cmd else ("", 0))
+    step = Step(id="s1", goal="g", check="check-s1")
+
+    async def main():
+        gate = SubmitGate(HarborEnvAdapter(env, asyncio.get_running_loop(), 30), step, 30, max_blocks=1)
+        first = await asyncio.to_thread(gate.execute, {"command": f"printf '{SUBMIT}\\ndone\\n'"})
+        try:
+            await asyncio.to_thread(gate.execute, {"command": f"printf '{SUBMIT}\\ndone\\n'"})
+        except Exception as e:
+            return first, type(e).__name__
+        return first, None
+
+    first, second = asyncio.run(main())
+    assert first["output"].startswith("NOT DONE YET: the step's check failed") and "value wrong" in first["output"]
+    assert "check-s1" not in first["output"] and second == "Submitted"  # the check command itself stays hidden
+
+
+def test_command_timeout_keeps_partial_output_and_honours_requests():
+    from phase2.worker import NONINTERACTIVE_ENV
+
+    seen = []
+
+    class Env(FakeEnvironment):
+        async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
+            seen.append((timeout_sec, env))
+            return await super().exec(command, cwd, env, timeout_sec, user)
+
+    env = Env(lambda cmd: ("partial", 124))
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        return (await asyncio.to_thread(adapter.execute, {"command": "make"}),
+                await asyncio.to_thread(adapter.execute, {"command": "# timeout: 600\nmake"}))
+
+    first, _ = asyncio.run(main())
+    assert "partial" in first["output"] and "timed out after about 20 s" in first["output"]
+    assert seen[0] == (30, NONINTERACTIVE_ENV) and seen[1][0] == 600

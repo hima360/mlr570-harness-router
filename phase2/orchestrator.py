@@ -166,7 +166,7 @@ class Orchestrator:
         team = bb.summary_for(step.id, step.depends_on)
         result = await asyncio.to_thread(self.work, step, model_id, team + self.env_block + handoff, out_path)
         outputs, missing = await read_outputs(environment, step)
-        if missing and result.exit_status == "Submitted":
+        if missing and result.exit_status in ("Submitted", "LimitsExceeded"):
             result, outputs, missing = await self._repair_outputs(
                 step, model_id, team, environment, result, missing, out_path)
         verdict = await verify(environment, step, result.exit_status, self.cfg.check_timeout)
@@ -203,7 +203,8 @@ class Orchestrator:
             action = parse_fix(reply, ran)
         except Exception as e:
             action = {"action": "escalate", "note": "", "error": str(e)[:300]}
-        self.trace.log("triage", step=step.id, n=self.interventions, **action)
+        self.trace.log("triage", step=step.id, n=self.interventions,
+                       **{("target" if k == "step" else k): v for k, v in action.items()})
         return action
 
     def _incident(self, step, record, result, verdict, out_path, instruction, bb, ran) -> str:

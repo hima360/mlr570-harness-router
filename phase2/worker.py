@@ -8,6 +8,10 @@ import os
 from dataclasses import dataclass
 
 os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")
+# mini-swe-agent retries a failed model call 10 times with 4-60 s waits (models/utils/retry.py); a CLI
+# error after a model turn ("prompt too long", usage limit) does not get better with retries (Codex never
+# retries those). 3 keeps one real second chance for transient errors.
+os.environ.setdefault("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "3")
 
 SUBMIT = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 
@@ -55,6 +59,38 @@ def outputs_hint(step) -> str:
     return text.rstrip("\n")
 
 
+class SubmitGate:
+    """Terminus-2 confirms completion twice; Claude Code's Stop hooks and Droid run the check when the agent
+    tries to stop. Here: on submit, run the step's check (and look for its promised outputs); if it fails, the
+    worker gets the check's output as its next observation and keeps its live context, instead of the
+    attempt ending and a fresh, pricier attempt starting. The check command itself is not shown.
+    At most `max_blocks` per attempt; each one costs a step of the worker's step limit."""
+
+    def __init__(self, inner, step, check_timeout: int, max_blocks: int = 2):
+        self.inner, self.step, self.check_timeout, self.max_blocks = inner, step, check_timeout, max_blocks
+        self.blocks = 0
+
+    def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
+        from minisweagent.exceptions import Submitted
+
+        try:
+            return self.inner.execute(action, cwd, timeout=timeout)
+        except Submitted:
+            if self.blocks >= self.max_blocks or not hasattr(self.inner, "gate"):
+                raise
+            problem = self.inner.gate(self.step, self.check_timeout)
+            if not problem:
+                raise
+            self.blocks += 1
+            left = self.max_blocks - self.blocks
+            return {"output": f"NOT DONE YET: {problem}\nFix it, then submit again"
+                              f"{f' ({left} more check before the step ends)' if left else ' (last check)'}.",
+                    "returncode": 1, "exception_info": ""}
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
 @dataclass
 class WorkerResult:
     exit_status: str  # Submitted | LimitsExceeded | error type
@@ -62,7 +98,15 @@ class WorkerResult:
     n_calls: int
 
 
+LINE_CAP = 1000  # oh-my-pi cuts lines at 768 bytes: one minified line must not fill the whole budget
+
+
 def clip_output(text: str, limit: int) -> str:
+    if any(len(line) > LINE_CAP for line in text.splitlines()):
+        half = LINE_CAP // 2  # keep both ends of a long line, as the whole-output clip does
+        text = "\n".join(line if len(line) <= LINE_CAP else
+                         f"{line[:half]} ... [{len(line) - 2 * half} chars of this line elided] ... {line[-half:]}"
+                         for line in text.splitlines())
     if limit <= 0 or len(text) <= limit:
         return text
     half = limit // 2
@@ -71,6 +115,22 @@ def clip_output(text: str, limit: int) -> str:
 
 
 SLOW_COMMAND_SEC = 15
+MAX_COMMAND_SEC = 900  # ceiling for a "# timeout: N" request
+# Pagers, editors and progress bars wait for a terminal and hang until the command timeout
+# (mini-swe-agent's text config and oh-my-pi's bash tool set the same). CI=true is left out: it changes tests.
+NONINTERACTIVE_ENV = {"PAGER": "cat", "GIT_PAGER": "cat", "MANPAGER": "cat", "EDITOR": "true", "VISUAL": "true",
+                      "GIT_TERMINAL_PROMPT": "0", "TERM": "dumb", "NO_COLOR": "1", "TQDM_DISABLE": "1",
+                      "PIP_PROGRESS_BAR": "off", "DEBIAN_FRONTEND": "noninteractive"}
+
+
+def bounded(command: str, seconds: int) -> str:
+    """Run under coreutils `timeout` inside the container, a little before Harbor's own limit: Harbor
+    discards all output when its limit fires (docker.py), `timeout` returns 124 with the partial output."""
+    import shlex
+
+    inner = f"bash -c {shlex.quote(command)}"
+    return (f"if command -v timeout >/dev/null 2>&1; then timeout -k 5 {max(seconds - 10, 5)} {inner}; "
+            f"else {inner}; fi")
 
 
 class HarborEnvAdapter:
@@ -88,19 +148,29 @@ class HarborEnvAdapter:
 
         import time
 
+        import re
+
         command = action.get("command", "")
+        limit = timeout or self.timeout
+        asked = re.match(r"\s*#\s*timeout:\s*(\d+)", command)  # Droid: the model can ask for a longer wait
+        if asked:
+            limit = max(10, min(int(asked.group(1)), MAX_COMMAND_SEC))
         t0 = time.monotonic()
         fut = asyncio.run_coroutine_threadsafe(
-            self.environment.exec(command, cwd=cwd or None, timeout_sec=timeout or self.timeout), self.loop)
+            self.environment.exec(bounded(command, limit), cwd=cwd or None, timeout_sec=limit,
+                                  env=NONINTERACTIVE_ENV), self.loop)
         try:
             r = fut.result()
             text = (r.stdout or "") + (("\n" + r.stderr) if r.stderr else "")
             out = {"output": text, "returncode": r.return_code, "exception_info": ""}
+            if r.return_code == 124:
+                out["output"] += (f"\n[timed out after about {limit - 10} s; output above is partial. Put "
+                                  "'# timeout: N' as the first line to wait longer, or run it in the background]")
         except Exception as e:  # timeouts and transport errors are shown to the model
             out = {"output": "", "returncode": -1,
                    "exception_info": f"An error occurred while executing the command: {e}. If it was a "
                                      "timeout, run long jobs in the background (nohup ... > log 2>&1 &) and poll "
-                                     "the log, or work on a smaller slice."}
+                                     "the log, work on a smaller slice, or put '# timeout: N' as the first line."}
         lines = out["output"].lstrip().splitlines(keepends=True)
         if lines and lines[0].strip() == SUBMIT and out["returncode"] == 0:
             summary = "".join(lines[1:]).strip()
@@ -111,6 +181,23 @@ class HarborEnvAdapter:
         if took >= SLOW_COMMAND_SEC:  # Droid: runtimes shown only above a threshold, so slow commands stand out
             out["output"] += f"\n[command took {took:.0f} s]"
         return out
+
+    def gate(self, step, check_timeout: int) -> str:
+        """What still keeps a submitted step from passing ("" = nothing): missing promised outputs, or
+        its check failing. Runs in the worker thread; the check itself runs on the event loop."""
+        return asyncio.run_coroutine_threadsafe(self._gate(step, check_timeout), self.loop).result()
+
+    async def _gate(self, step, check_timeout: int) -> str:
+        from .verifier import read_outputs, steps_dir, verify
+
+        _, missing = await read_outputs(self.environment, step)
+        if missing:
+            return f"these promised results are not in {steps_dir(step.id)}/outputs.txt yet: {', '.join(missing)}"
+        if step.check.strip():
+            v = await verify(self.environment, step, "Submitted", check_timeout)
+            if not v.passed:
+                return "the step's check failed. Its output:\n" + (v.output.strip()[-800:] or "(no output)")
+        return ""
 
     def get_template_vars(self, **kwargs) -> dict:
         return {"system": "Linux", "release": "", "version": "", "machine": "", **kwargs}
@@ -127,7 +214,8 @@ your_command_here
 ```"""
 
 
-def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None, reminder: str = ""):
+def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None, reminder: str = "",
+                step_limit: int = 0):
     import time
 
     from minisweagent.models.litellm_model import LitellmModel
@@ -147,7 +235,8 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
 
             complete = functools.partial(complete_fn_for(model_id), effort=effort, timeout=cfg.cli_timeout_sec)
         return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
-                               context_budget_chars=cfg.context_budget_chars, reminder=reminder)
+                               context_budget_chars=cfg.context_budget_chars, reminder=reminder,
+                               step_limit=step_limit)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):
@@ -184,12 +273,12 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     reminder = (f"Your step ({step.id}): {' '.join(step.goal.split())[:300]} Reply with a short THOUGHT and exactly "
                 f"one command block. Publish results in {steps_dir(step.id)}/outputs.txt; submit when done.")
     model = model or _make_model(cfg, ledger, model_id, on_call, effort="low" if step.effort == "low" else None,
-                                 reminder=reminder)
+                                 reminder=reminder, step_limit=step.worker_step_limit or cfg.worker_step_limit)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""
     agent = DefaultAgent(
-        model, env_adapter,
+        model, SubmitGate(env_adapter, step, cfg.check_timeout, cfg.submit_checks),
         system_template="You are a careful software engineer operating a Linux shell.",
         instance_template=INSTANCE_TEMPLATE,
         step_limit=step.worker_step_limit or cfg.worker_step_limit, cost_limit=0, output_path=output_path,

@@ -14,7 +14,7 @@ from phase2.planner import PlanError, make_plan, parse_plan
 from phase2.router import Router
 from phase2.scheduler import run_dag, writes_overlap
 from phase2.trace import Trace
-from phase2.worker import SUBMIT, HarborEnvAdapter, WorkerResult, run_worker
+from phase2.worker import SUBMIT, HarborEnvAdapter, WorkerResult, bounded, run_worker
 from tests.fakes import FakeEnvironment, FakeScorer
 
 
@@ -190,7 +190,7 @@ def test_worker_runs_mini_swe_agent_until_submit():
 
     res = asyncio.run(main())
     assert res.exit_status == "Submitted" and res.summary == "edited a.py" and res.n_calls == 2
-    assert env.commands[0] == "ls"
+    assert env.commands[0] == bounded("ls", 30)  # run under the container-side timeout
 
 
 # ---------- orchestrator: escalation + accounting end to end ----------
@@ -522,3 +522,89 @@ def test_steps_without_declared_outputs_never_repair(tmp_path):
                         None)
     summary = asyncio.run(orch.run("task", FakeEnvironment()))
     assert summary["steps"]["s1"]["passed"] and calls == [None]
+
+
+# ---------- error handler, compaction, plan shape ----------
+
+def test_parse_fix_holds_the_handler_to_its_menu():
+    from phase2.orchestrator import parse_fix
+
+    assert parse_fix('{"action": "retry", "note": "use -n"}', []) == {"action": "retry", "note": "use -n"}
+    assert parse_fix('{"action": "rerun_dependency", "step": "s1", "note": "bad key"}', ["s1"])["step"] == "s1"
+    assert parse_fix('{"action": "rerun_dependency", "step": "s9"}', ["s1"])["action"] == "escalate"
+    assert parse_fix('{"action": "rm -rf"}', [])["invalid"] and parse_fix("no json", [])["action"] == "escalate"
+
+
+def test_handler_reruns_the_blamed_earlier_step_then_retries(tmp_path):
+    cfg = load_config(policy="fixed:0", fixer_model="anthropic/claude-opus-5-5")
+    calls, box = [], {"key_fixed": False}
+
+    def work(step, model_id, bb_text, out_path):
+        calls.append((step.id, model_id))
+        if step.id == "s1" and len([c for c in calls if c[0] == "s1"]) == 2:
+            box["key_fixed"] = True
+        return WorkerResult("Submitted", f"{step.id} done", 1)
+
+    def handler(cmd):
+        if cmd == "check-s2":
+            return ("", 0 if box["key_fixed"] else 1)
+        return ("", 0)
+
+    fixer_prompts = []
+
+    def ask_fixer(messages):
+        fixer_prompts.append(messages[0]["content"])
+        return '{"action": "rerun_dependency", "step": "s1", "note": "the key from s1 is wrong"}'
+
+    trace = Trace(None)
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "true"), ("s2", ["s1"], [], "check-s2")), work,
+                        tmp_path, ask_fixer=ask_fixer)
+    summary = asyncio.run(orch.run("task", FakeEnvironment(handler)))
+    assert summary["steps"]["s2"]["passed"] and summary["n_interventions"] == 1
+    assert calls == [("s1", cfg.tiers[0]), ("s2", cfg.tiers[0]), ("s1", cfg.tiers[1]), ("s2", cfg.tiers[0])]
+    assert "FAILED STEP s2" in fixer_prompts[0] and "EARLIER STEPS IT BUILDS ON" in fixer_prompts[0]
+    assert any(e["event"] == "rerun" and e["router_error"] for e in trace.events)
+
+
+def test_provider_failures_skip_the_handler_and_are_not_router_errors(tmp_path):
+    cfg = load_config(policy="fixed:0", fixer_model="anthropic/claude-opus-5-5")
+    results = iter([WorkerResult("ProviderUnavailable", "", 0), WorkerResult("Submitted", "ok", 1)])
+    trace = Trace(None)
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "check-s1")), lambda *a: next(results), tmp_path,
+                        ask_fixer=lambda m: (_ for _ in ()).throw(AssertionError("handler must not be called")))
+    checks = iter([1, 0])
+    asyncio.run(orch.run("task", FakeEnvironment(lambda c: ("", next(checks)) if c == "check-s1" else ("", 0))))
+    esc = next(e for e in trace.events if e["event"] == "escalate")
+    assert esc["router_error"] is False and esc["reason"] == "ProviderUnavailable"
+
+
+def test_compaction_pins_the_first_prompt_and_keeps_the_newest_turns():
+    from phase2.worker import compact_messages
+
+    msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "TASK " + "t" * 1000}]
+    for i in range(40):
+        msgs += [{"role": "assistant", "content": f"THOUGHT {i}\n```mswea_bash_command\ncmd{i}\n```"},
+                 {"role": "user", "content": f"out{i} " + "o" * 2000}]
+    view = compact_messages(msgs, 20000)
+    assert sum(len(m["content"]) for m in view) <= 20000 + 1000
+    assert view[0] == msgs[0] and view[1]["content"].startswith("TASK") and "PROGRESS SO FAR" in view[1]["content"]
+    assert view[-1] == msgs[-1] and view[2]["role"] == "assistant" and "earlier turns omitted" in view[1]["content"]
+    assert compact_messages(msgs[:6], 20000) == msgs[:6]
+
+
+def test_plan_shape_reports_parallelism_and_unjustified_edges():
+    from phase2.planner import plan_shape
+
+    plan = parse_plan(json.dumps({"steps": [
+        {"id": "a", "goal": "find seed", "outputs": [{"name": "seed"}], "check": "true"},
+        {"id": "b", "goal": "list files", "check": "true"},
+        {"id": "c", "goal": "use the seed", "depends_on": ["a", "b"], "check": "true"}]}), 8)
+    shape = plan_shape(plan)
+    assert shape["parallelism"] == 1.5 and shape["widest_layer"] == 2 and shape["unjustified_edges"] == ["b->c"]
+
+
+def test_every_planned_step_needs_a_check():
+    with pytest.raises(PlanError, match="no check"):
+        parse_plan(plan_json(("s1", [], [], "")), 8)

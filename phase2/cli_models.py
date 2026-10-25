@@ -102,16 +102,24 @@ def _report(**info) -> None:
         fn(info)
 
 
-def run_cli(call, cli: str, attempts: int = 2, model: str | None = None) -> dict:
+RETRY_NOTE = ("Your previous reply took too long and was discarded; none of it was used. Reply again, much "
+              "shorter: keep your reasoning brief and give only what was asked.")
+
+
+def run_cli(call, cli: str, attempts: int = 2, model: str | None = None, retry_call=None) -> dict:
     """call() -> CompletedProcess. Retries once on a timeout (a provider stream that stalled); a second
     timeout raises ModelTimedOut, which ends the step attempt. Also retries once on a quick zero-turn
     failure. A slow zero-turn failure (provider unreachable) raises ProviderUnavailable at once. Every
     failed attempt is reported to the thread's failure sink."""
+    timed_out = False
     for i in range(attempts):
         t0 = time.perf_counter()
         try:
-            proc = call()
+            # After a timeout, the retry tells the model why (Terminus: "NONE of the actions... were
+            # performed"); an identical prompt tends to produce the same over-long reply.
+            proc = retry_call() if (i and timed_out and retry_call) else call()
         except subprocess.TimeoutExpired as e:
+            timed_out = True
             last = i == attempts - 1
             _report(cli=cli, model=model, attempt=i + 1, kind="timeout",
                     ms=round((time.perf_counter() - t0) * 1e3), error=f"no reply in {e.timeout:.0f} s",
@@ -210,7 +218,7 @@ def remind(messages: list[dict], reminder: str) -> list[dict]:
 
 
 def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
-                    reminder: str = ""):
+                    reminder: str = "", step_limit: int = 0):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -219,6 +227,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
 
     complete_fn = complete_fn or complete_fn_for(model)
     guard = IdleGuard(idle_sec)
+    calls = [0]
 
     class CliTextModel(LitellmTextbasedModel):
         abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable, ModelTimedOut]
@@ -228,9 +237,18 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
 
             guard.check()
             t0 = time.perf_counter()
-            text, usage = complete_fn(model, remind(compact_messages(messages, context_budget_chars), reminder))
+            calls[0] += 1
+            note = reminder
+            left = step_limit - calls[0] if step_limit else 99
+            if left <= 5:  # oh-my-pi's soft budget: warn before the hard limit ends the attempt
+                note += (f" About {max(left, 0)} actions left: if you will not finish, publish what you found "
+                         "and a blocker, then submit.")
+            text, usage = complete_fn(model, remind(compact_messages(messages, context_budget_chars), note))
             guard.progress()
+            if usage.get("truncated"):  # pi-mono runs none of a reply cut at the output limit
+                text = text.split("```mswea_bash_command")[0] + "\n(reply cut at the output limit; nothing was run)"
             text, guarded = guard_reply(text)
+            guarded = "+".join(x for x in ("truncated" if usage.get("truncated") else "", guarded) if x)
             if guarded:
                 usage = {**usage, "guarded": guarded}
             on_result(usage, text, (time.perf_counter() - t0) * 1e3)

@@ -1,0 +1,58 @@
+{
+  "tiers": [
+    "droid/gpt-6-luna",
+    "droid/glm-5.3-flash",
+    "claude/claude-haiku-5-5",
+    "claude/claude-sonnet-5-5",
+    "droid/gpt-6.1-sol"
+  ],
+  "planner_model": "claude/claude-opus-5-5",
+  "fixer_model": "claude/claude-opus-5-5",
+  "policy": "cascade",
+  "confidence_threshold": 0.35,
+  "base_url": "http://127.0.0.1:10100/v1",
+  "api_key": "local",
+  "prices_per_million": {
+    "claude/claude-haiku-5-5": {
+      "input": 0.1,
+      "cached": 0.01,
+      "output": 0.5
+    },
+    "claude/claude-sonnet-5-5": {
+      "input": 2,
+      "cached": 0.1,
+      "output": 10
+    },
+    "claude/claude-opus-5-5": {
+      "input": 4,
+      "cached": 0.2,
+      "output": 20
+    }
+  },
+  "max_plan_steps": 8,
+  "max_parallel": 3,
+  "worker_step_limit": 40,
+  "worker_command_timeout": 180,
+  "check_timeout": 300,
+  "random_seed": 570,
+  "factory_credit": {
+    "usd": null,
+    "source": "https://docs.factory.com/pricing/individuals.md ; https://docs.factory.com/models.md ; https://factory.com/pricing",
+    "checked": "2026-10-22",
+    "note": "Factory does not publish a USD value for one Factory Standard Credit (pricing page, plan pages, models page and Analytics API reference checked 2026-10-22). Droid cost_usd therefore stays 0 and factory_credits are reported per model. Measured: credits ~= input tokens x model multiplier (glm-5.3-flash 7314 tok -> 465 credits; gpt-6-sol 8336 tok -> 6689 credits). gpt-6-luna (81 credits / 1550 tok) and gpt-6.1-sol (2981 credits / 2961 tok) multipliers measured from one probe each on 2026-10-25. claude/ models are priced at Anthropic list price (prices_per_million), so a run's cost mixes USD and Factory credits.",
+    "multipliers": {
+      "droid/glm-5.3-flash": 0.06,
+      "droid/gpt-6-luna": 0.05,
+      "droid/gpt-6.1-sol": 1.0
+    }
+  },
+  "reasoning_effort": {
+    "droid/glm-5.3-flash": "high",
+    "droid/gpt-6-luna": "medium",
+    "claude/claude-haiku-5-5": "low",
+    "claude/claude-sonnet-5-5": "low",
+    "droid/gpt-6.1-sol": "medium",
+    "claude/claude-opus-5-5": "medium"
+  },
+  "prices_source": "Anthropic list prices per million tokens (https://platform.claude.com/docs/en/about-claude/pricing, as quoted by several Oct 2026 pricing summaries; checked 2026-10-22). Haiku 5.5 rate is for prompts up to 100K tokens. Cache writes are billed here at the plain input rate. Calls run on the Claude subscription via claude -p; cost_usd is the list-price equivalent, not the bill."
+}
