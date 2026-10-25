@@ -29,7 +29,7 @@
   },
   "reasoning_effort": {
     "droid/glm-5.3-flash": "high",
-    "droid/glm-5.3": "max",
+    "droid/glm-5.3": "high",
     "droid/gpt-6-sol": "medium"
   }
 }
