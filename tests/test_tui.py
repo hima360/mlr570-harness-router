@@ -237,3 +237,43 @@ def test_stop_run_also_kills_model_calls_in_their_own_groups(tmp_path):
             raise AssertionError(f"model call group {g} still alive")
         except ProcessLookupError:
             pass
+
+
+def test_progress_panel_plain_status():
+    from phase2.tui import progress_panel
+
+    events = [
+        {"t": 0.0, "event": "config", "tiers": ["droid/glm-5.3-flash", "droid/glm-5.3", "droid/gpt-6-sol"],
+         "worker_step_limit": 25, "step_wall_time_sec": 900, "step_idle_sec": 600, "planner_model": "droid/gpt-6-sol"},
+        {"t": 10.0, "event": "plan", "steps": [
+            {"id": "s1", "goal": "Find the host. More words.", "depends_on": [], "writes": [], "check": ""},
+            {"id": "s2", "goal": "Decode the session.", "depends_on": [], "writes": [], "check": ""},
+            {"id": "s3", "goal": "Write the flag.", "depends_on": ["s1", "s2"], "writes": [], "check": "test -f x"}]},
+        {"t": 11.0, "event": "route", "step": "s1", "tier": 0, "model": "droid/glm-5.3-flash"},
+        {"t": 11.0, "event": "route", "step": "s2", "tier": 0, "model": "droid/glm-5.3-flash"},
+        {"t": 20.0, "event": "llm_call", "role": "worker", "step": "s1", "model": "droid/glm-5.3-flash", "ms": 9000},
+        {"t": 30.0, "event": "attempt", "step": "s1", "attempt": 1, "model": "droid/glm-5.3-flash", "passed": True,
+         "n_calls": 1},
+        {"t": 40.0, "event": "attempt", "step": "s2", "attempt": 1, "model": "droid/glm-5.3-flash", "passed": False,
+         "n_calls": 3},
+        {"t": 40.0, "event": "escalate", "step": "s2", "from_tier": 0, "to_tier": 1},
+        {"t": 50.0, "event": "llm_call_failed", "role": "worker", "step": "s2", "model": "droid/glm-5.3",
+         "kind": "timeout", "ms": 180000, "will_retry": True},
+    ]
+    text = progress_panel(events, now_t=400.0).plain
+    assert "1 of 3 steps done" in text and "running for 6m 40s" in text
+    assert "done by GLM 5.3 Flash (via Droid)" in text
+    assert "retrying with a stronger model: GLM 5.3 (via Droid) · action 1 of 25" in text
+    assert "waiting for GLM 5.3's next move: 5m 50s" in text and "1 failed model call(s)" in text
+    assert "waits for steps 1 and 2 to finish" in text
+
+    ended = progress_panel(events, now_t=400.0, status="stopped").plain
+    assert "stopped mid-work" in ended and "ran for" in ended
+
+
+def test_progress_panel_before_plan():
+    from phase2.tui import progress_panel
+
+    assert "Starting up" in progress_panel([], 0).plain
+    cfg = [{"t": 0.0, "event": "config", "planner_model": "droid/gpt-6-sol"}]
+    assert "Planning: GPT-6 Sol (via Droid)" in progress_panel(cfg, 12).plain

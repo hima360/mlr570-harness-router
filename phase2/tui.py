@@ -455,6 +455,149 @@ def turn_summary(thought: str, cmd: str, ok: bool | None) -> Text:
     return t
 
 
+def _clock(sec: float) -> str:
+    sec = max(int(sec), 0)
+    return f"{sec // 3600}h {sec % 3600 // 60:02d}m" if sec >= 3600 else f"{sec // 60}m {sec % 60:02d}s"
+
+
+def step_states(events: list[dict], now_t: float) -> list[dict]:
+    """Plain status of every planned step: waiting / working / retrying / done / failed, with its
+    model, actions so far and timings. `now_t` is the current time on the trace clock (seconds)."""
+    plan = next((e for e in events if e.get("event") == "plan"), None)
+    if not plan:
+        return []
+    out = []
+    for s in plan["steps"]:
+        sid = s["id"]
+        mine = [e for e in events if e.get("step") == sid]
+        route = next((e for e in mine if e.get("event") == "route"), None)
+        attempts = [e for e in mine if e.get("event") == "attempt"]
+        calls = [e for e in mine if e.get("event") == "llm_call"]
+        escalations = [e for e in mine if e.get("event") == "escalate"]
+        failures = [e for e in mine if e.get("event") == "llm_call_failed"]
+        done = any(a.get("passed") for a in attempts)
+        over = done or (attempts and len(attempts) > len(escalations))
+        state = ("done" if done else "failed" if over else "retrying" if escalations
+                 else "working" if route else "waiting")
+        model = (route or {}).get("model") or (attempts[-1].get("model") if attempts else None)
+        if escalations:
+            tiers = next((e.get("tiers") for e in events if e.get("event") == "config"), None) or []
+            to = escalations[-1].get("to_tier")
+            model = tiers[to] if isinstance(to, int) and to < len(tiers) else (calls[-1]["model"] if calls else model)
+        # current attempt's calls only: actions since the last escalation
+        since = escalations[-1]["t"] if escalations else (route or {}).get("t", 0)
+        cur_calls = [c for c in calls if c["t"] >= since]
+        started = (route or {}).get("t")
+        ended = attempts[-1]["t"] if over and attempts else None
+        last = max([e["t"] for e in mine] or [since])
+        out.append({
+            "id": sid, "goal": s["goal"], "state": state, "model": model,
+            "depends_on": s.get("depends_on") or [],
+            "actions": len(cur_calls) or (attempts[-1].get("n_calls") or 0 if over and attempts else 0),
+            "attempt": len(escalations) + 1,
+            "elapsed": ((ended if ended is not None else now_t) - started) if started is not None else 0,
+            "attempt_elapsed": (now_t - since) if state in ("working", "retrying") else 0,
+            "idle": (now_t - last) if state in ("working", "retrying") else 0,
+            "failed_calls": len(failures),
+            "has_check": bool((s.get("check") or "").strip()),
+        })
+    return out
+
+
+STATE_LOOK = {"done": ("✓", "bold green", "done"), "failed": ("✗", "bold red", "failed"),
+              "working": ("●", "bold yellow", "working"), "retrying": ("●", "bold yellow",
+                                                                     "retrying with a stronger model"),
+              "waiting": ("○", "dim", "waiting"), "stopped": ("■", "dim", "stopped mid-work")}
+
+
+def trace_now(job, events: list[dict]) -> float:
+    """Seconds on the trace clock right now (trace t=0 is when the harness started). For a finished run,
+    the time of its last event."""
+    import time as _time
+
+    if not events or not job.agent_dir:
+        return 0.0
+    trace = job.agent_dir / "trace.jsonl"
+    try:
+        start = trace.stat().st_mtime - events[-1]["t"]
+    except OSError:
+        return events[-1]["t"]
+    return (_time.time() - start) if job.status == "running" else events[-1]["t"]
+
+
+def progress_panel(events: list[dict], now_t: float, status: str = "running", reward=None) -> Text:
+    """The top panel: what the run is doing right now, in plain words, with a progress bar."""
+    cfg = next((e for e in events if e.get("event") == "config"), {})
+    steps = step_states(events, now_t)
+    if status != "running":  # a step that was mid-work when the run ended did not finish
+        for st in steps:
+            if st["state"] in ("working", "retrying"):
+                st["state"] = "stopped"
+    t = Text()
+    if not events:
+        t.append("Starting up: building the task's container and loading the router. This takes a minute or two.",
+                 style="dim")
+        return t
+    if not steps:
+        planner = pretty_model(cfg.get("planner_model", "the planner"))
+        t.append(f"Planning: {planner} is reading the task and splitting it into steps "
+                 f"({_clock(now_t)} so far).", style="yellow")
+        return t
+    n_done = sum(s["state"] == "done" for s in steps)
+    n_fail = sum(s["state"] == "failed" for s in steps)
+    width = 24
+    filled = round(width * (n_done + n_fail) / len(steps))
+    t.append("Progress  ", style="bold")
+    t.append("█" * filled, style="green")
+    t.append("░" * (width - filled), style="dim")
+    t.append(f"  {n_done} of {len(steps)} steps done" + (f", {n_fail} failed" if n_fail else ""))
+    t.append(f"   ·   {'running for' if status == 'running' else 'ran for'} {_clock(now_t)}\n", style="dim")
+    turn_cap = cfg.get("worker_step_limit")
+    time_cap = cfg.get("step_wall_time_sec")
+    idle_cap = cfg.get("step_idle_sec")
+    for i, s in enumerate(steps, 1):
+        icon, style, word = STATE_LOOK[s["state"]]
+        t.append(f"  {icon} Step {i}  ", style=style)
+        t.append(_short(first_sentence(s["goal"], 70), 70))
+        t.append("\n")
+        who = pretty_model(s["model"]) if s["model"] else ""
+        if s["state"] == "waiting":
+            deps = [str(next(j for j, x in enumerate(steps, 1) if x["id"] == d)) for d in s["depends_on"]
+                    if any(x["id"] == d for x in steps)]
+            which = (f"step {deps[0]}" if len(deps) == 1 else
+                     "steps " + ", ".join(deps[:-1]) + " and " + deps[-1]) if deps else ""
+            t.append(f"           waits for {which} to finish\n" if deps else
+                     "           waiting for a free worker slot\n", style="dim")
+        elif s["state"] in ("working", "retrying"):
+            line = f"           {word}: {who} · action {s['actions'] + 1}"
+            line += f" of {turn_cap}" if turn_cap else ""
+            line += f" · {_clock(s['attempt_elapsed'])}" + (f" of {_clock(time_cap)} allowed" if time_cap else "")
+            t.append(line + "\n", style="yellow")
+            wait = Text(f"           waiting for {who.split(' (')[0]}'s next move: {_clock(s['idle'])}",
+                        style="dim")
+            if idle_cap and s["idle"] > idle_cap * 0.5:
+                wait.stylize("bold red")
+                wait.append(f"  (gives up at {_clock(idle_cap)} with no reply)", style="red")
+            t.append_text(wait)
+            if s["failed_calls"]:
+                t.append(f"  · {s['failed_calls']} failed model call(s)", style="red")
+            t.append("\n")
+        elif s["state"] == "stopped":
+            t.append(f"           {word}: {who} had taken {s['actions']} actions\n", style="dim")
+        else:
+            line = f"           {word} by {who} in {_clock(s['elapsed'])} · {s['actions']} actions"
+            if s["attempt"] > 1:
+                line += f" · needed {s['attempt'] - 1} escalation(s)"
+            t.append(line + "\n", style="dim")
+    if status != "running":
+        if reward is not None:
+            verdict = "passed" if reward == 1 else "did not pass"
+            t.append(f"\nTerminal-Bench result: {verdict} (score {reward})", style="bold")
+        else:
+            t.append(f"\nRun ended: {status}", style="bold")
+    return t
+
+
 def overview(events: list[dict], workers: dict[str, list], result: dict | None = None) -> list[tuple]:
     """Tree rows as (key, label, children); children has the same shape. Pure, for the Tree widget and tests."""
     cfg = next((e for e in events if e.get("event") == "config"), {})
@@ -655,7 +798,8 @@ class HarnessTUI(App):
     #jobs { height: 1fr; }
     #main { padding: 0 1; }
     #meta { height: auto; padding: 1 0 0 0; }
-    #roles { height: auto; border: round $panel-lighten-2; padding: 0 1; margin: 1 0 0 0; }
+    #progress { height: auto; border: round $panel-lighten-2; padding: 0 1; margin: 1 0 0 0; }
+    #roles { height: auto; padding: 1 1; }
     TabbedContent { height: 1fr; }
     RichLog { height: 1fr; }
     NewRunScreen, ConfirmScreen { align: center middle; }
@@ -688,7 +832,7 @@ class HarnessTUI(App):
                 yield ListView(id="jobs")
             with Vertical(id="main"):
                 yield Static(id="meta")
-                yield Static(id="roles")
+                yield Static(id="progress")
                 with TabbedContent(initial="tab-overview"):
                     with TabPane("Overview", id="tab-overview"):
                         yield Tree("run", id="overview")
@@ -698,6 +842,8 @@ class HarnessTUI(App):
                         yield DataTable(id="steps", zebra_stripes=True, cursor_type="row")
                     with TabPane("Worker turns", id="tab-worker"):
                         yield RichLog(id="worker", wrap=True)
+                    with TabPane("Details", id="tab-details"):
+                        yield Static(id="roles")
                     with TabPane("Raw events", id="tab-raw"):
                         yield RichLog(id="feed", wrap=True)
                     with TabPane("Harbor log", id="tab-log"):
@@ -745,6 +891,8 @@ class HarnessTUI(App):
         events = J.read_events(job.agent_dir)
         workers = J.worker_files(job.agent_dir)
         log = self.root / "jobs" / f"{job.name}.log"
+        self.query_one("#progress", Static).update(
+            progress_panel(events, trace_now(job, events), job.status, job.reward))
         sig = (job.name, job.status, len(events), workers[-1].stat().st_mtime if workers else 0,
                log.stat().st_size if log.exists() else 0)
         if sig == self._view_sig and not force:
@@ -758,16 +906,17 @@ class HarnessTUI(App):
         elapsed = (events[-1]["t"] if events else 0)
         head.append(f"\ntask {job.task}   backend {Path(job.config).name or '?'}   policy {job.policy or '?'}"
                     f"   caps {job.caps or '-'}", style="dim")
-        head.append(f"\n{tot['calls']} model calls · {_k(tot['input_tokens'])} in · {_k(tot['output_tokens'])} out"
-                    + (f" · {_k(tot['factory_credits'])} Factory credits" if tot["factory_credits"] else "")
-                    + (f" · ${tot['cost_usd']:.4f} list price" if tot["cost_usd"] else "")
-                    + f" · {elapsed:.0f}s traced")
+        spent = (f"{_k(tot['factory_credits'])} Factory credits" if tot["factory_credits"] else
+                 f"${tot['cost_usd']:.4f} at list price" if tot["cost_usd"] else "nothing yet")
+        head.append(f"\nSpent so far: {spent} over {tot['calls']} model calls   (token details: Details tab)",
+                    style="dim")
         if job.exception:
             head.append(f"\n{job.exception}", style="red")
         meta.update(head)
-        self.query_one("#roles", Static).update(roles_text(events) if events else
-                                                Text("waiting for the trace (container build, Laya load) ...",
-                                                     style="dim"))
+        roles = roles_text(events) if events else Text("nothing yet", style="dim")
+        roles.append(f"\n\n{tot['calls']} model calls · {_k(tot['input_tokens'])} input tokens · "
+                     f"{_k(tot['output_tokens'])} output tokens · {elapsed:.0f} s traced", style="dim")
+        self.query_one("#roles", Static).update(roles)
         worker_msgs = {w.stem: J.read_worker(w) for w in workers}
         result = J._read_json(job.trial_dir / "result.json") if job.trial_dir else {}
         self._fill_overview(job, overview(events, worker_msgs, result or None))
