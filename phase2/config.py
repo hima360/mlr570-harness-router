@@ -58,6 +58,8 @@ class HarnessConfig:
     # CLI workers: once a conversation outgrows this, older turns are folded into PROGRESS SO FAR.
     # 0 = off. ~32k chars is ~11-13k tokens with CLI overhead (measured 2.7-3.3 chars/token).
     context_budget_chars: int = 32000
+    # claude/ workers: CLAUDE_CODE_MAX_OUTPUT_TOKENS per call (0 = CLI default). Droid has no such flag.
+    max_output_tokens: int = 8000
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180

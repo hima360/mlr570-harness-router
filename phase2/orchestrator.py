@@ -18,6 +18,9 @@ from .verifier import Verdict, read_outputs, steps_dir, verify
 
 
 REPAIR_STEP_LIMIT = 4  # model calls for the missing-outputs repair turn: write the file, submit
+# Failures of the provider, not of the model's ability: code handles them (no handler call) and they
+# are not counted as routing errors (Claude Code keeps provider fallback apart from escalation).
+INFRA_EXITS = ("ProviderUnavailable", "ModelTimedOut", "StepIdle")
 MAX_ATTEMPTS = 3  # per step: first try, one escalation, one more when the error handler asks for it
 
 FIXER_ACTIONS = ("rerun_dependency", "retry", "escalate", "stop")
@@ -56,16 +59,19 @@ class Orchestrator:
         self.cfg, self.ledger, self.trace, self.router = cfg, ledger, trace, router
         self.ask_planner, self.work, self.ask_fixer = ask_planner, work, ask_fixer
         self.interventions = 0
+        self.env_block = ""
         self.steps, self.records = {}, {}
         self.logs_dir = logs_dir
         self.on_progress = lambda: None  # agent.py refreshes the Harbor context here
 
     async def run(self, instruction: str, environment) -> dict:
+        env_summary = await self._env_summary(environment)
+        # Droid: show the starting state as command output so workers do not re-run the same listing.
+        self.env_block = f"\n\nAlready run at the start (do not repeat): pwd && ls -la\n{env_summary[:1500]}"
         if self.cfg.plan_from:  # same DAG as an earlier run: only the routing policy differs
             plan = load_pinned_plan(self.cfg.plan_from, self.cfg.max_plan_steps)
             plan_info = {"attempts": 0, "fallback": False, "errors": [], "pinned_from": str(self.cfg.plan_from)}
         else:
-            env_summary = await self._env_summary(environment)
             plan, plan_info = await asyncio.to_thread(
                 make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
         self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan),
@@ -119,7 +125,9 @@ class Orchestrator:
                 break
             if len(record["attempts"]) >= MAX_ATTEMPTS:
                 break
-            action = await self._triage(step, record, result, verdict, out_path, instruction, bb)
+            infra = result.exit_status in INFRA_EXITS
+            action = ({"action": "escalate"} if infra else
+                      await self._triage(step, record, result, verdict, out_path, instruction, bb))
             kind, note = action["action"], action.get("note", "")
             model_id = self.cfg.tiers[record["tier"]]
             notes = self._handoff(out_path, model_id, result.exit_status, verdict.output)
@@ -139,7 +147,7 @@ class Orchestrator:
                 break
             record["escalations"] += 1
             self.trace.log("escalate", step=step.id, from_tier=record["tier"], to_tier=record["tier"] + 1,
-                           router_error=True)
+                           router_error=not infra, reason=result.exit_status)
             handoff = notes + hint
             if handoff:
                 self.trace.log("handoff", step=step.id, from_model=model_id,
@@ -156,7 +164,7 @@ class Orchestrator:
         bb.update(step.id, status="running", tier=tier, model=model_id, attempts=n)
         out_path = (self.logs_dir / f"worker_{step.id}_a{n}.json") if self.logs_dir else None
         team = bb.summary_for(step.id, step.depends_on)
-        result = await asyncio.to_thread(self.work, step, model_id, team + handoff, out_path)
+        result = await asyncio.to_thread(self.work, step, model_id, team + self.env_block + handoff, out_path)
         outputs, missing = await read_outputs(environment, step)
         if missing and result.exit_status == "Submitted":
             result, outputs, missing = await self._repair_outputs(

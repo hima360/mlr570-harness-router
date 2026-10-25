@@ -15,7 +15,8 @@ def record_call(ledger, model: str, usage, ms: float, reply: str) -> dict:
     u = ledger.read_usage(usage) if usage is not None else {}
     cost = ledger.add_from_usage(model, usage) if usage is not None else 0.0
     return {"model": model, "ms": round(ms), **{k: v for k, v in u.items() if v},
-            "cost_usd": round(cost, 6), "reply": " ".join(str(reply or "").split())[:300]}
+            "cost_usd": round(cost, 6), "reply": " ".join(str(reply or "").split())[:300],
+            **({"guarded": usage["guarded"]} if isinstance(usage, dict) and usage.get("guarded") else {})}
 
 
 PLANNER_RETRY_WAIT_SEC = 5.0

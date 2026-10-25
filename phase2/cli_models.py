@@ -158,7 +158,8 @@ def complete_fn_for(model: str, cfg=None):
         return None
     if cfg is None:
         return fn
-    return functools.partial(fn, effort=(cfg.reasoning_effort or {}).get(model), timeout=cfg.cli_timeout_sec)
+    extra = {"max_output_tokens": cfg.max_output_tokens} if fn is claude_code.complete and cfg.max_output_tokens else {}
+    return functools.partial(fn, effort=(cfg.reasoning_effort or {}).get(model), timeout=cfg.cli_timeout_sec, **extra)
 
 class StepIdle(Exception):
     """No model reply for too long: ends the step attempt (mini-swe-agent does not retry it)."""
@@ -182,7 +183,34 @@ class IdleGuard:
         self.last = time.monotonic()
 
 
-def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0):
+def guard_reply(text: str) -> tuple[str, str]:
+    """Stream-rule style guard (oh-my-pi TTSR; Claude Code retries malformed calls): weak models keep
+    writing the conversation past their own turn ("### USER", fake <returncode> output) or put several
+    commands in one reply. Cut at the first invented turn and keep only the first command block, so the
+    reply parses as one action instead of a format error. Returns (text, reason or "")."""
+    import re
+
+    reasons = []
+    cut = re.search(r"\n(### (USER|ASSISTANT|SYSTEM)\b|<returncode>)", text)
+    if cut:
+        text, _ = text[: cut.start()], reasons.append("invented_turn")
+    blocks = list(re.finditer(r"```mswea_bash_command\s*.*?```", text, re.S))
+    if len(blocks) > 1:
+        text = text[: blocks[0].end()]
+        reasons.append(f"{len(blocks)}_commands")
+    return text, "+".join(reasons)
+
+
+def remind(messages: list[dict], reminder: str) -> list[dict]:
+    """Droid's recency trick: restate the rules at the newest end of the context on every call."""
+    if not reminder or not messages or messages[-1].get("role") != "user":
+        return messages
+    last = messages[-1]
+    return [*messages[:-1], {**last, "content": f"{last.get('content') or ''}\n\n[Reminder] {reminder}"}]
+
+
+def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
+                    reminder: str = ""):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -200,8 +228,11 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
 
             guard.check()
             t0 = time.perf_counter()
-            text, usage = complete_fn(model, compact_messages(messages, context_budget_chars))
+            text, usage = complete_fn(model, remind(compact_messages(messages, context_budget_chars), reminder))
             guard.progress()
+            text, guarded = guard_reply(text)
+            if guarded:
+                usage = {**usage, "guarded": guarded}
             on_result(usage, text, (time.perf_counter() - t0) * 1e3)
             return litellm.ModelResponse(
                 model=model,

@@ -101,6 +101,9 @@ def parse_plan(text: str, max_steps: int) -> Plan:
         if nopath:
             raise PlanError(f"step {s.id} file outputs need a path: {nopath}")
     topo_order(plan)
+    for s in plan.steps:  # Droid: "exit 0 means finished, not succeeded"; never trust the worker's word
+        if not s.check.strip():
+            raise PlanError(f"step {s.id} has no check: give it a shell command that fails on a wrong result")
     return plan
 
 

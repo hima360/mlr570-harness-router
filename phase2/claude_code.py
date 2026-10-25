@@ -22,12 +22,14 @@ def is_claude_code(model: str) -> bool:
 
 
 def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600,
-             run=run_group) -> tuple[str, dict]:
+             run=run_group, max_output_tokens: int = 0) -> tuple[str, dict]:
     """Returns (reply text, OpenAI-style usage incl. claude_code_cost_usd). `run` is injectable for tests."""
     model_id = model[len(PREFIX):] if is_claude_code(model) else model
     system = "\n\n".join(str(m.get("content") or "") for m in messages if m.get("role") == "system")
     rest = [m for m in messages if m.get("role") != "system"]
     env = {k: v for k, v in os.environ.items() if k not in API_ENV_VARS}
+    if max_output_tokens:  # cheap tiers must not write 16k-token replies (they hit the call timeout)
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
     with tempfile.TemporaryDirectory() as d:
         argv = ["claude", "-p", "--model", model_id, "--output-format", "json", "--tools", "",
                 "--safe-mode", "--no-session-persistence", "--strict-mcp-config",

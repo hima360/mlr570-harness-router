@@ -23,7 +23,8 @@ Other steps and what they reported:
 Do only your step. Other agents may work on other files at the same time, so only edit files
 your step needs{{writes_hint}}.{{outputs_hint}}
 
-Every response must contain exactly one bash command. Each command runs in a fresh shell in the
+If a command fails, try a different approach; never end your step without either submitting or publishing a
+blocker. Every response must contain exactly one bash command. Each command runs in a fresh shell in the
 task container, so prefix with `cd /path && ...` when needed.{{format_hint}}
 When your step is done, run exactly:
 printf '""" + SUBMIT + """\\n<one or two sentences on what you did and which files changed>\\n'
@@ -69,6 +70,9 @@ def clip_output(text: str, limit: int) -> str:
             f"(head, tail, grep, sed -n) to see more ...]\n\n{text[-half:]}")
 
 
+SLOW_COMMAND_SEC = 15
+
+
 class HarborEnvAdapter:
     """mini-swe-agent Environment protocol on top of a Harbor BaseEnvironment."""
 
@@ -82,7 +86,10 @@ class HarborEnvAdapter:
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
         from minisweagent.exceptions import Submitted
 
+        import time
+
         command = action.get("command", "")
+        t0 = time.monotonic()
         fut = asyncio.run_coroutine_threadsafe(
             self.environment.exec(command, cwd=cwd or None, timeout_sec=timeout or self.timeout), self.loop)
         try:
@@ -91,13 +98,18 @@ class HarborEnvAdapter:
             out = {"output": text, "returncode": r.return_code, "exception_info": ""}
         except Exception as e:  # timeouts and transport errors are shown to the model
             out = {"output": "", "returncode": -1,
-                   "exception_info": f"An error occurred while executing the command: {e}"}
+                   "exception_info": f"An error occurred while executing the command: {e}. If it was a "
+                                     "timeout, run long jobs in the background (nohup ... > log 2>&1 &) and poll "
+                                     "the log, or work on a smaller slice."}
         lines = out["output"].lstrip().splitlines(keepends=True)
         if lines and lines[0].strip() == SUBMIT and out["returncode"] == 0:
             summary = "".join(lines[1:]).strip()
             raise Submitted({"role": "exit", "content": summary,
                              "extra": {"exit_status": "Submitted", "submission": summary}})
         out["output"] = clip_output(out["output"], self.max_output_chars)
+        took = time.monotonic() - t0
+        if took >= SLOW_COMMAND_SEC:  # Droid: runtimes shown only above a threshold, so slow commands stand out
+            out["output"] += f"\n[command took {took:.0f} s]"
         return out
 
     def get_template_vars(self, **kwargs) -> dict:
@@ -115,7 +127,7 @@ your_command_here
 ```"""
 
 
-def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None):
+def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None, reminder: str = ""):
     import time
 
     from minisweagent.models.litellm_model import LitellmModel
@@ -135,7 +147,7 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
 
             complete = functools.partial(complete_fn_for(model_id), effort=effort, timeout=cfg.cli_timeout_sec)
         return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
-                               context_budget_chars=cfg.context_budget_chars)
+                               context_budget_chars=cfg.context_budget_chars, reminder=reminder)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):
@@ -167,7 +179,12 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
 
     from .cli_models import complete_fn_for
 
-    model = model or _make_model(cfg, ledger, model_id, on_call, effort="low" if step.effort == "low" else None)
+    from .verifier import steps_dir
+
+    reminder = (f"Your step ({step.id}): {' '.join(step.goal.split())[:300]} Reply with a short THOUGHT and exactly "
+                f"one command block. Publish results in {steps_dir(step.id)}/outputs.txt; submit when done.")
+    model = model or _make_model(cfg, ledger, model_id, on_call, effort="low" if step.effort == "low" else None,
+                                 reminder=reminder)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""

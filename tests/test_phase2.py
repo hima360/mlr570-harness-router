@@ -26,7 +26,7 @@ def plan_json(*steps):
 # ---------- planner ----------
 
 def test_parse_plan_accepts_valid_dag():
-    p = parse_plan(plan_json(("s1", [], ["a.py"], ""), ("s2", ["s1"], ["b.py"], "true")), 8)
+    p = parse_plan(plan_json(("s1", [], ["a.py"], "true"), ("s2", ["s1"], ["b.py"], "true")), 8)
     assert [s.id for s in p.steps] == ["s1", "s2"]
 
 
@@ -47,7 +47,7 @@ def test_parse_plan_enforces_step_limit():
 
 
 def test_make_plan_repairs_then_falls_back():
-    replies = iter(["garbage", plan_json(("s1", [], [], ""))])
+    replies = iter(["garbage", plan_json(("s1", [], [], "true"))])
     plan, info = make_plan("task", "ls", lambda m: next(replies), 8)
     assert info["attempts"] == 2 and not info["fallback"] and plan.steps[0].id == "s1"
     plan, info = make_plan("the task", "ls", lambda m: "garbage", 8)
