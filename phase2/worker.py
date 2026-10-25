@@ -236,7 +236,7 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
             complete = functools.partial(complete_fn_for(model_id), effort=effort, timeout=cfg.cli_timeout_sec)
         return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
                                context_budget_chars=cfg.context_budget_chars, reminder=reminder,
-                               step_limit=step_limit)
+                               step_limit=step_limit, session_budget_chars=cfg.session_budget_chars)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):

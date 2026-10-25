@@ -16,6 +16,48 @@ PROMPT_HEADER = ("You are acting as a plain language model inside another progra
                  "the conversation below, following its instructions exactly.\n\n")
 
 
+def delta_text(messages: list[dict]) -> str:
+    """The new user turns of a resumed CLI session, as one plain prompt (the session already holds the
+    earlier turns and the model's own replies)."""
+    return "\n\n".join(str(m.get("content") or "") for m in messages if m.get("role") != "assistant")
+
+
+class CliSession:
+    """One CLI-side conversation per worker attempt (`claude -p --resume`, `droid exec -s`), so each call
+    sends only the new turns and the provider caches the rest. Measured 2026-10-25: a resumed call read
+    21,488 of ~22.5k tokens from the cache (Claude) and 18,176 (Droid, ~5x fewer credits per call); the
+    stateless single-message prompt read 0 and re-wrote the whole cache every call.
+    Droid reports usage cumulatively over the session and Claude Code reports total_cost_usd cumulatively,
+    so `per_call` turns running totals into this call's share."""
+
+    def __init__(self):
+        import tempfile
+
+        self.id: str | None = None
+        self.dir = tempfile.mkdtemp(prefix="phase2-session-")  # resume finds sessions by working directory
+        self.system = ""      # the first call's system prompt, re-sent unchanged so the cached prefix holds
+        self.seen = 0         # mini-swe-agent messages already in the session
+        self.chars = 0        # rough size of the session's context
+        self.totals: dict = {}
+        self.guarded = False  # the previous reply was cut by guard_reply: tell the model on the next turn
+        self.resets = 0
+
+    def per_call(self, values: dict, session_id: str | None, keys) -> dict:
+        if session_id != self.id:  # a new session starts its running totals from zero
+            self.totals = {}
+        out = dict(values)
+        for k in keys:
+            total = values.get(k) or 0
+            out[k] = total - self.totals.get(k, 0)
+            self.totals[k] = total
+        self.id = session_id or self.id
+        return out
+
+    def reset(self) -> None:
+        self.id, self.totals, self.chars = None, {}, 0
+        self.resets += 1
+
+
 def serialize(messages: list[dict], header: str = PROMPT_HEADER) -> str:
     parts = []
     for m in messages:
@@ -218,7 +260,7 @@ def remind(messages: list[dict], reminder: str) -> list[dict]:
 
 
 def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
-                    reminder: str = "", step_limit: int = 0):
+                    reminder: str = "", step_limit: int = 0, session_budget_chars: int = 0):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -228,6 +270,39 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
     complete_fn = complete_fn or complete_fn_for(model)
     guard = IdleGuard(idle_sec)
     calls = [0]
+    session = CliSession() if session_budget_chars else None
+
+    def session_call(messages, note):
+        """Send only the turns the CLI session has not seen; once the session outgrows its budget, start a
+        new one from the compacted view (stable compaction: the fold happens rarely, so the cached prefix
+        survives between folds instead of changing on every call)."""
+        from .worker import compact_messages
+
+        def size(ms):
+            return sum(len(str(m.get("content") or "")) for m in ms)
+
+        delta = [m for m in messages[session.seen:] if m.get("role") != "assistant"]
+        if session.id and session.chars + size(delta) <= session_budget_chars:
+            if session.guarded:
+                delta = [{"role": "user", "content": "(Only the first command of your last reply was run.)"}, *delta]
+            payload, kind = delta, "resume"
+        else:
+            if session.id:
+                session.reset()
+            payload, kind = compact_messages(messages, context_budget_chars), "new"
+        try:
+            text, usage = complete_fn(model, remind(payload, note), session=session)
+        except (StepIdle, ModelTimedOut):
+            raise
+        except Exception:
+            if kind == "new":
+                raise
+            session.reset()  # a lost or broken session: start again from the compacted view
+            payload, kind = compact_messages(messages, context_budget_chars), "new"
+            text, usage = complete_fn(model, remind(payload, note), session=session)
+        session.seen = len(messages)
+        session.chars = (session.chars if kind == "resume" else 0) + size(payload) + len(text)
+        return text, {**usage, "session": kind}
 
     class CliTextModel(LitellmTextbasedModel):
         abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable, ModelTimedOut]
@@ -243,12 +318,15 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
             if left <= 5:  # oh-my-pi's soft budget: warn before the hard limit ends the attempt
                 note += (f" About {max(left, 0)} actions left: if you will not finish, publish what you found "
                          "and a blocker, then submit.")
-            text, usage = complete_fn(model, remind(compact_messages(messages, context_budget_chars), note))
+            text, usage = session_call(messages, note) if session else \
+                complete_fn(model, remind(compact_messages(messages, context_budget_chars), note))
             guard.progress()
             if usage.get("truncated"):  # pi-mono runs none of a reply cut at the output limit
                 text = text.split("```mswea_bash_command")[0] + "\n(reply cut at the output limit; nothing was run)"
             text, guarded = guard_reply(text)
             guarded = "+".join(x for x in ("truncated" if usage.get("truncated") else "", guarded) if x)
+            if session:
+                session.guarded = bool(guarded)
             if guarded:
                 usage = {**usage, "guarded": guarded}
             on_result(usage, text, (time.perf_counter() - t0) * 1e3)
