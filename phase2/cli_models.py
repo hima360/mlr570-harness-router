@@ -178,6 +178,8 @@ def run_cli(call, cli: str, attempts: int = 2, model: str | None = None, retry_c
             # a slow one is the provider being unreachable (~80 s each) and fails fast.
             retry = not ran and ms < QUICK_FAIL_MS and i < attempts - 1
             kind = "error" if ran else ("transient" if ms < QUICK_FAIL_MS else "provider_unavailable")
+            if "usage polic" in str(e).lower() or "[cyber]" in str(e):
+                kind = "refused"  # the provider's safety classifier declined the request (logged for the paper)
             _report(cli=cli, model=model, attempt=i + 1, kind=kind, ms=round(ms), error=str(e)[-300:],
                     will_retry=retry)
             if retry:

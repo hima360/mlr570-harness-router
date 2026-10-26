@@ -36,7 +36,7 @@ Reply with only one JSON object:
 - {"action": "stop", "note": "<why>"}: nothing the team can do will fix it."""
 
 
-def parse_fix(reply: str, allowed_steps) -> dict:
+def parse_fix(reply: str, allowed_steps, allowed_actions=FIXER_ACTIONS) -> dict:
     """The handler's decision, held to the menu: anything else becomes a plain escalation."""
     m = re.search(r"\{.*\}", reply or "", re.S)
     try:
@@ -44,7 +44,7 @@ def parse_fix(reply: str, allowed_steps) -> dict:
     except ValueError:
         a = {}
     note = str((a or {}).get("note", ""))[:1000] if isinstance(a, dict) else ""
-    if not isinstance(a, dict) or a.get("action") not in FIXER_ACTIONS:
+    if not isinstance(a, dict) or a.get("action") not in allowed_actions:
         return {"action": "escalate", "note": note, "invalid": True}
     if a["action"] == "rerun_dependency":
         if a.get("step") not in allowed_steps:
@@ -126,6 +126,12 @@ class Orchestrator:
             if len(record["attempts"]) >= MAX_ATTEMPTS:
                 break
             infra = result.exit_status in INFRA_EXITS
+            failed_deps = [d for d in step.depends_on if bb.entries[d].status == "failed"]
+            if failed_deps and not infra:
+                # A stronger model cannot supply a missing upstream result either (1026: s4 escalated to
+                # Sonnet without s3's key and failed again). The best-effort first attempt is enough.
+                self.trace.log("stop", step=step.id, reason="dependency_failed", failed_deps=failed_deps)
+                break
             action = ({"action": "escalate"} if infra else
                       await self._triage(step, record, result, verdict, out_path, instruction, bb))
             kind, note = action["action"], action.get("note", "")
@@ -197,10 +203,16 @@ class Orchestrator:
             return {"action": "escalate"}
         self.interventions += 1
         ran = [d for d in self._ancestors(step.id) if d in self.records]
-        prompt = self._incident(step, record, result, verdict, out_path, instruction, bb, ran)
+        # Only offer what the harness can still do (1026: the handler chose escalate after the step's one
+        # escalation was used, and the call was wasted).
+        allowed = [a for a in FIXER_ACTIONS if not (
+            (a == "escalate" and (record["escalations"] or record["tier"] >= len(self.cfg.tiers) - 1)) or
+            (a == "rerun_dependency" and not ran))]
+        prompt = self._incident(step, record, result, verdict, out_path, instruction, bb, ran) + \
+            f"\n\nAVAILABLE ACTIONS NOW: {', '.join(allowed)}"
         try:
             reply = await asyncio.to_thread(self.ask_fixer, [{"role": "user", "content": prompt}])
-            action = parse_fix(reply, ran)
+            action = parse_fix(reply, ran, allowed)
         except Exception as e:
             action = {"action": "escalate", "note": "", "error": str(e)[:300]}
         self.trace.log("triage", step=step.id, n=self.interventions,

@@ -608,3 +608,34 @@ def test_plan_shape_reports_parallelism_and_unjustified_edges():
 def test_every_planned_step_needs_a_check():
     with pytest.raises(PlanError, match="no check"):
         parse_plan(plan_json(("s1", [], [], "")), 8)
+
+
+def test_handler_is_offered_only_actions_still_possible(tmp_path):
+    cfg = load_config(policy="fixed:0", fixer_model="anthropic/claude-opus-5-5")
+    prompts, checks = [], iter([1, 1, 1, 1])
+
+    def ask_fixer(messages):
+        prompts.append(messages[0]["content"])
+        return '{"action": "escalate", "note": "try harder"}'
+
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), Trace(None), Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "check-s1")),
+                        lambda *a: WorkerResult("Submitted", "", 1), tmp_path, ask_fixer=ask_fixer)
+    asyncio.run(orch.run("task", FakeEnvironment(lambda c: ("", next(checks)) if c == "check-s1" else ("", 0))))
+    assert "AVAILABLE ACTIONS NOW: retry, escalate, stop" in prompts[0]
+    assert "AVAILABLE ACTIONS NOW: retry, stop" in prompts[1]  # escalation already used
+
+
+def test_no_escalation_when_a_dependency_failed(tmp_path):
+    cfg = load_config(policy="fixed:0")
+    models, trace = [], Trace(None)
+
+    def work(step, model_id, *a):
+        models.append((step.id, model_id))
+        return WorkerResult("Submitted", "", 1)
+
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "false"), ("s2", ["s1"], [], "false")), work, tmp_path)
+    asyncio.run(orch.run("task", FakeEnvironment(lambda c: ("", 1) if c == "false" else ("", 0))))
+    assert [m for s, m in models if s == "s2"] == [cfg.tiers[0]]  # s1 escalated; s2 did not
+    assert any(e["event"] == "stop" and e["reason"] == "dependency_failed" for e in trace.events)
