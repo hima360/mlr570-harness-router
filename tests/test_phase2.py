@@ -639,3 +639,27 @@ def test_no_escalation_when_a_dependency_failed(tmp_path):
     asyncio.run(orch.run("task", FakeEnvironment(lambda c: ("", 1) if c == "false" else ("", 0))))
     assert [m for s, m in models if s == "s2"] == [cfg.tiers[0]]  # s1 escalated; s2 did not
     assert any(e["event"] == "stop" and e["reason"] == "dependency_failed" for e in trace.events)
+
+
+def test_pure_chain_is_merged_into_one_checklist_step(tmp_path):
+    cfg = load_config(policy="fixed:0", merge_chains=True, worker_step_limit=20, step_wall_time_sec=600)
+    seen, trace = [], Trace(None)
+
+    def work(step, *a):
+        seen.append(step)
+        return WorkerResult("Submitted", "", 1)
+
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "c1"), ("s2", ["s1"], [], "c2")), work, tmp_path)
+    env = FakeEnvironment()
+    summary = asyncio.run(orch.run("task", env))
+    assert len(seen) == 1 and seen[0].id == "all" and seen[0].check == "( c1 ) && ( c2 )"
+    assert "1. [s1] do s1" in seen[0].goal and "2. [s2] do s2" in seen[0].goal
+    assert (seen[0].worker_step_limit, seen[0].wall_time_sec) == (40, 1200) and summary["steps"]["all"]["passed"]
+    assert any(c == "mkdir -p /tmp/steps/s2" for c in env.commands)
+    # parallel work is kept split
+    seen.clear()
+    orch2 = Orchestrator(cfg, Ledger(cfg.prices_per_million), Trace(None), Router(cfg, laya=None, arch=None),
+                         lambda m: plan_json(("s1", [], [], "c1"), ("s2", [], [], "c2")), work, tmp_path)
+    asyncio.run(orch2.run("task", FakeEnvironment()))
+    assert sorted(s.id for s in seen) == ["s1", "s2"]

@@ -64,8 +64,9 @@ class Step(BaseModel):
     outputs: list[Output] = []
     check: str = ""
     effort: str = ""  # "low": the worker runs at low reasoning effort (assembling known results)
-    # Set by the harness only (the short repair turn for missing outputs); not part of the plan.
+    # Set by the harness only (repair turns, merged chains); not part of the plan.
     worker_step_limit: int | None = Field(default=None, exclude=True)
+    wall_time_sec: int | None = Field(default=None, exclude=True)
 
 
 class Plan(BaseModel):
@@ -139,6 +140,29 @@ def plan_shape(plan: Plan) -> dict:
                 unjustified.append(f"{d}->{s.id}")
     return {"parallelism": round(len(plan.steps) / max(depth.values()), 2),
             "widest_layer": max(Counter(depth.values()).values()), "unjustified_edges": unjustified}
+
+
+def merge_chain(plan: Plan, step_limit: int, wall_time_sec: int, max_steps: int = 100) -> Plan:
+    """A plan with no parallel work becomes ONE step for one agent: the planned steps become its checklist
+    and all their checks must pass. 2026-10-26: one Sonnet agent passed shadow-relay 8/8 in 6 min for $0.45;
+    the same work split into a 4-step chain scored 5/8 at best ($0.62, 14 min): every handoff lost context
+    and no step could run in parallel. Each part still writes its facts to its own /tmp/steps/<id>/ folder,
+    so the planned checks keep working."""
+    parts = [next(s for s in plan.steps if s.id == i) for i in topo_order(plan)]
+    lines = []
+    for n, s in enumerate(parts, 1):
+        facts = ", ".join(o.name for o in s.outputs if o.kind == "fact")
+        files = ", ".join(o.path for o in s.outputs if o.kind == "file")
+        lines.append(f"{n}. [{s.id}] {s.goal}" + (f"\n   Publish as name=value in /tmp/steps/{s.id}/outputs.txt: {facts}"
+                                                   if facts else "") + (f"\n   Create: {files}" if files else ""))
+    writes = sorted({w for s in parts for w in s.writes})
+    merged = Step(id="all", goal="Do the whole task yourself, part by part, in this order:\n" + "\n".join(lines),
+                  writes=["**"] if "**" in writes else writes,
+                  check=" && ".join(f"( {s.check} )" for s in parts if s.check.strip()),
+                  effort="" if any(s.effort != "low" for s in parts) else "low")
+    merged.worker_step_limit = min(step_limit * len(parts), max_steps)
+    merged.wall_time_sec = wall_time_sec * len(parts)
+    return Plan(steps=[merged])
 
 
 def single_step_plan(instruction: str) -> Plan:

@@ -282,7 +282,7 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
         system_template="You are a careful software engineer operating a Linux shell.",
         instance_template=INSTANCE_TEMPLATE,
         step_limit=step.worker_step_limit or cfg.worker_step_limit, cost_limit=0, output_path=output_path,
-        wall_time_limit_seconds=cfg.step_wall_time_sec,
+        wall_time_limit_seconds=step.wall_time_sec or cfg.step_wall_time_sec,
     )
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,

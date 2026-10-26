@@ -51,6 +51,8 @@ class HarnessConfig:
     # Path to an earlier run's trace.jsonl (or its trial / agent dir): reuse that plan instead of calling
     # the planner, so routing conditions are compared on the same DAG.
     plan_from: str = ""
+    # A plan with no parallel work (a pure chain) runs as one step with the planned steps as its checklist.
+    merge_chains: bool = False
     # Error handler: one fresh call per failed step (no shell, picks one action from a fixed menu).
     # "" = off: a failed step escalates once, as before. Capped at max_interventions per run.
     fixer_model: str = ""
@@ -98,7 +100,9 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
     # Harbor --ak values may arrive as strings.
     for name, f in known.items():
         value = getattr(cfg, name)
-        if f.type in (int, float, "int", "float") and isinstance(value, str):
+        if f.type in (bool, "bool") and isinstance(value, str):
+            setattr(cfg, name, value.strip().lower() in ("1", "true", "yes", "on"))
+        elif f.type in (int, float, "int", "float") and isinstance(value, str):
             setattr(cfg, name, (int if f.type in (int, "int") else float)(value))
     from .droid import is_droid
 

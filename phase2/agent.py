@@ -26,7 +26,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "max_plan_steps", "worker_step_limit", "cli_timeout_sec", "step_wall_time_sec", "step_idle_sec",
                "max_observation_chars", "plan_from",
                "fixer_model", "max_interventions", "context_budget_chars", "max_output_tokens",
-               "submit_checks", "session_budget_chars")
+               "submit_checks", "session_budget_chars",
+               "merge_chains")
 
 
 class RoutedHarness(BaseAgent):

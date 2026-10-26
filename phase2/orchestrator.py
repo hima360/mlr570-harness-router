@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from .blackboard import Blackboard, facts_text
-from .planner import load_pinned_plan, make_plan, plan_shape, topo_order
+from .planner import load_pinned_plan, make_plan, merge_chain, plan_shape, topo_order
 from .scheduler import run_dag
 from .verifier import Verdict, read_outputs, steps_dir, verify
 
@@ -74,8 +74,19 @@ class Orchestrator:
         else:
             plan, plan_info = await asyncio.to_thread(
                 make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
+        shape = plan_shape(plan)
         self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan),
-                       planner_model=self.cfg.planner_model, **plan_shape(plan), **plan_info)
+                       planner_model=self.cfg.planner_model, **shape, **plan_info)
+        for s in plan.steps:  # every planned part's folder, also when the parts are merged below
+            try:
+                await environment.exec(f"mkdir -p {steps_dir(s.id)}", timeout_sec=30)
+            except Exception:
+                pass
+        if self.cfg.merge_chains and len(plan.steps) > 1 and shape["parallelism"] <= 1.0:
+            parts = [s.id for s in plan.steps]
+            plan = merge_chain(plan, self.cfg.worker_step_limit, self.cfg.step_wall_time_sec)
+            self.trace.log("merged", parts=parts, into=plan.steps[0].id,
+                           worker_step_limit=plan.steps[0].worker_step_limit, check=plan.steps[0].check)
         self.steps = {s.id: s for s in plan.steps}
         bb = Blackboard(task=instruction)
         for s in plan.steps:

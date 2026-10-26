@@ -54,5 +54,6 @@
     "droid/gpt-6.1-sol": "medium",
     "claude/claude-opus-5-5": "medium"
   },
-  "prices_source": "Anthropic list prices per million tokens (https://platform.claude.com/docs/en/about-claude/pricing, as quoted by several Oct 2026 pricing summaries; checked 2026-10-22). Haiku 5.5 rate is for prompts up to 100K tokens. Cache writes are billed here at the plain input rate. Calls run on the Claude subscription via claude -p; cost_usd is the list-price equivalent, not the bill."
+  "prices_source": "Anthropic list prices per million tokens (https://platform.claude.com/docs/en/about-claude/pricing, as quoted by several Oct 2026 pricing summaries; checked 2026-10-22). Haiku 5.5 rate is for prompts up to 100K tokens. Cache writes are billed here at the plain input rate. Calls run on the Claude subscription via claude -p; cost_usd is the list-price equivalent, not the bill.",
+  "merge_chains": true
 }
