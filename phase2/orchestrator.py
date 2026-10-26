@@ -160,7 +160,7 @@ class Orchestrator:
             if kind == "retry":
                 handoff = notes + hint
                 continue
-            if record["escalations"] or record["tier"] >= len(self.cfg.tiers) - 1:
+            if record["escalations"] >= self.cfg.max_escalations or record["tier"] >= len(self.cfg.tiers) - 1:
                 break
             record["escalations"] += 1
             self.trace.log("escalate", step=step.id, from_tier=record["tier"], to_tier=record["tier"] + 1,
@@ -217,7 +217,8 @@ class Orchestrator:
         # Only offer what the harness can still do (1026: the handler chose escalate after the step's one
         # escalation was used, and the call was wasted).
         allowed = [a for a in FIXER_ACTIONS if not (
-            (a == "escalate" and (record["escalations"] or record["tier"] >= len(self.cfg.tiers) - 1)) or
+            (a == "escalate" and (record["escalations"] >= self.cfg.max_escalations or
+                                  record["tier"] >= len(self.cfg.tiers) - 1)) or
             (a == "rerun_dependency" and not ran))]
         prompt = self._incident(step, record, result, verdict, out_path, instruction, bb, ran) + \
             f"\n\nAVAILABLE ACTIONS NOW: {', '.join(allowed)}"

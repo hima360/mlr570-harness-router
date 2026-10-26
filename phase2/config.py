@@ -57,6 +57,8 @@ class HarnessConfig:
     # "" = off: a failed step escalates once, as before. Capped at max_interventions per run.
     fixer_model: str = ""
     max_interventions: int = 2
+    # Escalations per step (one tier up each). 0 for fixed-model baselines, so they stay on their model.
+    max_escalations: int = 1
     # CLI workers: once a conversation outgrows this, older turns are folded into PROGRESS SO FAR.
     # 0 = off. ~32k chars is ~11-13k tokens with CLI overhead (measured 2.7-3.3 chars/token).
     context_budget_chars: int = 32000
