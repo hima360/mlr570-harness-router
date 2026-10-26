@@ -602,3 +602,81 @@ def test_command_timeout_keeps_partial_output_and_honours_requests():
     first, _ = asyncio.run(main())
     assert "partial" in first["output"] and "timed out after about 20 s" in first["output"]
     assert seen[0] == (30, NONINTERACTIVE_ENV) and seen[1][0] == 600
+
+
+# ---------- CLI sessions: send only new turns so the provider caches the prefix ----------
+
+def _session_line(text, sid, **usage):
+    return json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": text,
+                       "session_id": sid, "usage": usage, **({"total_cost_usd": usage.pop("cost")} if "cost" in usage else {})})
+
+
+def test_droid_session_sends_only_new_turns_and_converts_running_totals():
+    from phase2.cli_models import CliSession
+
+    calls = []
+
+    def run(argv, cwd=None, **kw):
+        calls.append((argv, Path(argv[argv.index("-f") + 1]).read_text()))
+        totals = [dict(input_tokens=18000, output_tokens=40, cache_read_input_tokens=0, factory_credits=1100),
+                  dict(input_tokens=18100, output_tokens=60, cache_read_input_tokens=18000, factory_credits=1330)]
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "S1", **totals[len(calls) - 1]), stderr="")
+
+    s = CliSession()
+    first = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "task"}]
+    _, u1 = droid.complete("droid/glm-5.3-flash", first, run=run, session=s)
+    _, u2 = droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "obs 1"}], run=run, session=s)
+    assert "-s" not in calls[0][0] and calls[1][0][calls[1][0].index("-s") + 1] == "S1"
+    assert "### USER" in calls[0][1] and calls[1][1] == "obs 1"  # resume sends the new turn only
+    assert u1["factory_credits"] == 1100 and u2["factory_credits"] == 230  # running totals -> per call
+    assert u2["prompt_tokens_details"]["cached_tokens"] == 18000 and u2["completion_tokens"] == 20
+
+
+def test_claude_session_resumes_with_the_same_system_prompt_and_per_call_cost():
+    from phase2 import claude_code
+    from phase2.cli_models import CliSession
+
+    calls = []
+
+    def run(argv, input=None, **kw):
+        calls.append((argv, input))
+        cost = [0.0045, 0.0049][len(calls) - 1]
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "C1", input_tokens=2,
+                                           cache_read_input_tokens=21000 * (len(calls) - 1), output_tokens=5,
+                                           cost=cost), stderr="")
+
+    s = CliSession()
+    claude_code.complete("claude/claude-haiku-5-5", [{"role": "system", "content": "SYS"},
+                                                     {"role": "user", "content": "task"}], run=run, session=s)
+    _, u = claude_code.complete("claude/claude-haiku-5-5", [{"role": "user", "content": "obs"}], run=run, session=s)
+    a1, a2 = calls[0][0], calls[1][0]
+    assert "--resume" not in a1 and a2[a2.index("--resume") + 1] == "C1" and "--no-session-persistence" not in a1
+    assert a1[a1.index("--system-prompt") + 1] == a2[a2.index("--system-prompt") + 1]  # cached prefix intact
+    assert calls[1][1] == "obs" and abs(u["claude_code_cost_usd"] - 0.0004) < 1e-9
+
+
+def test_text_model_session_resumes_then_restarts_past_its_budget_and_after_errors():
+    from phase2 import cli_models
+
+    sent = []
+
+    def fake(model, msgs, session=None):
+        sent.append(("resume" if session.id else "new", [m["content"] for m in msgs]))
+        if len(sent) == 3:  # the third call (a resume) fails: the session is lost
+            raise RuntimeError("session not found")
+        session.id = session.id or f"S{len(sent)}"
+        return "```mswea_bash_command\nls\n```", {"prompt_tokens": 1, "completion_tokens": 1}
+
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, complete_fn=fake,
+                                       context_budget_chars=100000, session_budget_chars=3000)
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "task"}]
+    model._query(msgs)
+    msgs += [{"role": "assistant", "content": "a1"}, {"role": "user", "content": "obs1"}]
+    model._query(msgs)
+    msgs += [{"role": "assistant", "content": "a2"}, {"role": "user", "content": "obs2"}]
+    model._query(msgs)  # resume fails -> new session from the full view
+    msgs += [{"role": "assistant", "content": "a3"}, {"role": "user", "content": "x" * 4000}]
+    model._query(msgs)  # over the session budget -> new session
+    kinds = [k for k, _ in sent]
+    assert kinds == ["new", "resume", "resume", "new", "new"]
+    assert sent[1][1] == ["obs1"] and sent[3][1][0] == "s" and len(sent[4][1]) == len(msgs)
