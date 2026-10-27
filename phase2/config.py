@@ -59,6 +59,13 @@ class HarnessConfig:
     max_interventions: int = 2
     # Escalations per step (one tier up each). 0 for fixed-model baselines, so they stay on their model.
     max_escalations: int = 1
+    # Spend caps per run (0 = off), in list-price USD and/or Factory credits. Over the cap the harness starts
+    # no new attempt, escalation, handler call or step. The escalation-only top tier (Opus / Sol) is entered
+    # only while spend is under top_tier_budget_frac of the cap: 2026-10-26, failing tasks escalated to Opus
+    # cost up to 3.3x always-Sonnet (heat-pump-warranty $3.45 vs $1.05) for no gain.
+    max_run_cost_usd: float = 0.0
+    max_run_credits: float = 0.0
+    top_tier_budget_frac: float = 0.5
     # CLI workers: once a conversation outgrows this, older turns are folded into PROGRESS SO FAR.
     # 0 = off. ~32k chars is ~11-13k tokens with CLI overhead (measured 2.7-3.3 chars/token).
     context_budget_chars: int = 32000

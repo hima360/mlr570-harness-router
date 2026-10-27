@@ -676,3 +676,21 @@ def test_planner_failure_falls_back_to_one_step_and_one_step_skips_the_planner(t
                         refused, lambda *a: WorkerResult("Submitted", "", 1), tmp_path)
     summary = asyncio.run(orch.run("task", FakeEnvironment()))
     assert summary["plan_info"]["planner"] == "skipped" and summary["steps"]["s1"]["passed"]
+
+
+def test_spend_caps_stop_new_work_and_gate_the_top_tier(tmp_path):
+    cfg = load_config(policy="fixed:2", max_run_cost_usd=1.0)  # tier 2 -> escalation to tier 3 (top)
+    led, trace, models = Ledger(cfg.prices_per_million), Trace(None), []
+
+    def work(step, model_id, *a):
+        models.append((step.id, model_id))
+        led.add(model_id, 300_000, 0, 0)  # each attempt is expensive
+        return WorkerResult("Submitted", "", 1)
+
+    orch = Orchestrator(cfg, led, trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "false"), ("s2", [], [], "false")), work, tmp_path)
+    asyncio.run(orch.run("task", FakeEnvironment(lambda c: ("", 1) if c == "false" else ("", 0))))
+    stops = [(e["step"], e["reason"]) for e in trace.events if e["event"] == "stop"]
+    assert all(m == cfg.tiers[2] for _, m in models)  # never escalated into the top tier
+    assert ("s1", "top_tier_budget") in stops or ("s1", "budget") in stops
+    assert orch.over_budget() and len(models) <= 2

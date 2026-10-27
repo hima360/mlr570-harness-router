@@ -127,6 +127,10 @@ class Orchestrator:
         record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False,
                   "tier": decision.tier}
         self.records[step.id] = record
+        if why := self.over_budget():
+            self.trace.log("stop", step=step.id, reason="budget", detail=why)
+            bb.update(step.id, status="failed")
+            return record
         try:
             await environment.exec(f"mkdir -p {steps_dir(step.id)}", timeout_sec=30)
         except Exception:
@@ -138,6 +142,9 @@ class Orchestrator:
                 record["passed"] = True
                 break
             if len(record["attempts"]) >= MAX_ATTEMPTS:
+                break
+            if why := self.over_budget():
+                self.trace.log("stop", step=step.id, reason="budget", detail=why)
                 break
             infra = result.exit_status in INFRA_EXITS
             failed_deps = [d for d in step.depends_on if bb.entries[d].status == "failed"]
@@ -164,6 +171,9 @@ class Orchestrator:
                 handoff = notes + hint
                 continue
             if record["escalations"] >= self.cfg.max_escalations or record["tier"] >= len(self.cfg.tiers) - 1:
+                break
+            if record["tier"] + 1 == len(self.cfg.tiers) - 1 and (why := self.over_budget(self.cfg.top_tier_budget_frac)):
+                self.trace.log("stop", step=step.id, reason="top_tier_budget", detail=why)
                 break
             record["escalations"] += 1
             self.trace.log("escalate", step=step.id, from_tier=record["tier"], to_tier=record["tier"] + 1,
@@ -201,6 +211,16 @@ class Orchestrator:
         bb.update(step.id, summary=result.summary, check_output=verdict.output[-500:], outputs=outputs)
         self.on_progress()
         return result, verdict, out_path
+
+    def over_budget(self, frac: float = 1.0) -> str:
+        """Why spending must stop ("" = within budget): the run's list-price USD or Factory credits have
+        reached `frac` of their cap."""
+        t = self.ledger.totals()
+        if self.cfg.max_run_cost_usd and t.cost_usd >= frac * self.cfg.max_run_cost_usd:
+            return f"spent ${t.cost_usd:.2f} of ${self.cfg.max_run_cost_usd:.2f}"
+        if self.cfg.max_run_credits and t.factory_credits >= frac * self.cfg.max_run_credits:
+            return f"spent {t.factory_credits:,.0f} of {self.cfg.max_run_credits:,.0f} credits"
+        return ""
 
     def _ancestors(self, step_id: str) -> list[str]:
         seen, todo = [], list(self.steps[step_id].depends_on) if step_id in self.steps else []
@@ -261,6 +281,9 @@ class Orchestrator:
     async def _rerun(self, dep, note, environment, bb) -> bool:
         """Re-open a finished earlier step one tier up, told what a later step found wrong."""
         rec = self.records[dep.id]
+        if rec["tier"] + 1 >= len(self.cfg.tiers) - 1 and (why := self.over_budget(self.cfg.top_tier_budget_frac)):
+            self.trace.log("stop", step=dep.id, reason="top_tier_budget", detail=why)
+            return False
         rec["tier"] = min(rec["tier"] + 1, len(self.cfg.tiers) - 1)
         self.trace.log("rerun", step=dep.id, tier=rec["tier"], model=self.cfg.tiers[rec["tier"]],
                        note=note[:500], router_error=True)
