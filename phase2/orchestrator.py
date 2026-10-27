@@ -12,11 +12,29 @@ import re
 from pathlib import Path
 
 from .blackboard import Blackboard, facts_text
-from .planner import load_pinned_plan, make_plan, merge_chain, plan_shape, single_step_plan, topo_order
+from .planner import Step, load_pinned_plan, make_plan, merge_chain, plan_shape, single_step_plan, topo_order
 from .scheduler import run_dag
 from .cli_models import backend_of
 from .verifier import Verdict, read_outputs, steps_dir, verify
 
+
+ACC_DIR = "/tmp/steps/acc"
+# A final step's check also runs the independent acceptance tests, once they exist ("ready").
+ACC_RUN = f"{{ [ ! -f {ACC_DIR}/ready ] || bash {ACC_DIR}/test.sh; }}"
+ACC_GOAL = f"""Write ACCEPTANCE TESTS for the task above; do NOT implement the task and do not edit any file outside
+{ACC_DIR}/. Other agents are implementing it at the same time; your tests will judge their work.
+1. Read the task text closely and list every requirement it states (behaviours, scenarios, failure and edge
+   cases, performance limits, output formats and paths, permissions: the task's own tests may run as a
+   non-root user in a fresh shell) in {ACC_DIR}/requirements.md.
+2. Write {ACC_DIR}/test.sh: a bash script that checks each stated requirement against the finished system,
+   prints PASS or FAIL with a reason for each, and exits 0 only if all pass. Use only tools already in the
+   container. Test only what the task states; do not invent requirements.
+3. The implementation may not exist yet, so the tests may fail now: that is expected. Make sure the script
+   runs (bash -n {ACC_DIR}/test.sh) and fails clearly rather than crashing.
+Then submit."""
+ACC_HINT = (f"\nAn independent agent (acc) is writing acceptance tests from the task text at {ACC_DIR}/test.sh. "
+            f"Once {ACC_DIR}/ready exists, run `bash {ACC_DIR}/test.sh` and fix your work until it passes before you "
+            f"submit; do not edit {ACC_DIR}/.")
 
 REPAIR_STEP_LIMIT = 4  # model calls for the missing-outputs repair turn: write the file, submit
 # Failures of the provider, not of the model's ability: code handles them (no handler call) and they
@@ -93,15 +111,33 @@ class Orchestrator:
             plan = merge_chain(plan, self.cfg.worker_step_limit, self.cfg.step_wall_time_sec)
             self.trace.log("merged", parts=parts, into=plan.steps[0].id,
                            worker_step_limit=plan.steps[0].worker_step_limit, check=plan.steps[0].check)
+        acc = None
+        if self.cfg.acceptance_model:
+            # 2026-10-27 analysis: in 15 of 20 failed runs the step's own check passed but the task's tests
+            # failed. An agent that never sees the implementation writes tests from the task text; the final
+            # steps must pass them (Droid: validators independent of, and from another family than, the builder).
+            acc = Step(id="acc", goal=ACC_GOAL, writes=[f"{ACC_DIR}/**"],
+                       check=f"test -s {ACC_DIR}/test.sh && bash -n {ACC_DIR}/test.sh")
+            acc.worker_step_limit = self.cfg.acceptance_step_limit
+            for s in self._sinks(plan.steps):
+                s.check = f"( {s.check} ) && {ACC_RUN}" if s.check.strip() else ACC_RUN
+                s.goal += ACC_HINT
+            self.trace.log("acceptance_planned", model=self.cfg.acceptance_model,
+                           final_steps=[s.id for s in self._sinks(plan.steps)])
         self.steps = {s.id: s for s in plan.steps}
         bb = Blackboard(task=instruction)
         for s in plan.steps:
             bb.add(s.id, s.goal, s.writes, [o.name for o in s.outputs], s.depends_on)
+        if acc:
+            bb.add("acc", "write acceptance tests from the task text (does not implement)", acc.writes, ["test.sh"], [])
 
         async def run_step(step):
             return await self._run_step(step, instruction, environment, bb)
 
+        acc_task = asyncio.create_task(self._run_acceptance(acc, instruction, environment, bb)) if acc else None
         results = await run_dag(plan.steps, run_step, self.cfg.max_parallel)
+        if acc_task and await acc_task:
+            await self._recheck_with_acceptance(plan.steps, results, instruction, environment, bb)
         if self.logs_dir:
             bb.save(self.logs_dir / "blackboard.json")
         summary = {
@@ -116,6 +152,54 @@ class Orchestrator:
         self.trace.log("done", **{k: summary[k] for k in ("n_escalations", "n_failed_steps", "n_interventions",
                                                           "policy")})
         return summary
+
+    @staticmethod
+    def _sinks(steps):
+        return [s for s in steps if not any(s.id in t.depends_on for t in steps)]
+
+    async def _run_acceptance(self, acc, instruction, environment, bb) -> bool:
+        """The acceptance-test writer runs beside the implementers; when its script exists and parses, it
+        marks it ready, so final steps' checks start running it."""
+        model = self.cfg.acceptance_model
+        try:
+            await environment.exec(f"mkdir -p {ACC_DIR}", timeout_sec=30)
+        except Exception:
+            pass
+        bb.update("acc", status="running", model=model, attempts=1)
+        out_path = (self.logs_dir / "worker_acc_a1.json") if self.logs_dir else None
+        team = bb.summary_for("acc", (), roster=self.cfg.team_roster)
+        result = await asyncio.to_thread(self.work, acc, model, team + self.env_block, out_path)
+        verdict = await verify(environment, acc, result.exit_status, self.cfg.check_timeout)
+        if verdict.passed:
+            try:
+                await environment.exec(f"touch {ACC_DIR}/ready", timeout_sec=30)
+            except Exception:
+                verdict = Verdict(False, "could not mark the acceptance tests ready")
+        self.trace.log("acceptance", model=model, exit_status=result.exit_status, n_calls=result.n_calls,
+                       ready=verdict.passed, check_output=verdict.output[-300:])
+        bb.update("acc", status="done" if verdict.passed else "failed", summary=result.summary)
+        return verdict.passed
+
+    async def _recheck_with_acceptance(self, steps, results, instruction, environment, bb) -> None:
+        """A final step that passed before the tests were ready is checked again; if the tests fail, it is
+        re-opened once on the same model with their output (within budget)."""
+        for s in self._sinks(steps):
+            record = results.get(s.id)
+            if not record or not record["passed"]:
+                continue
+            r = await verify(environment, Step(id=s.id, goal="-", check=f"bash {ACC_DIR}/test.sh"), "Submitted",
+                             self.cfg.check_timeout)
+            self.trace.log("acceptance_check", step=s.id, passed=r.passed, output=r.output[-500:])
+            if r.passed or self.over_budget():
+                continue
+            handoff = (f"\n\nYour step passed its own check, but the independent acceptance tests written from the "
+                       f"task text fail ({ACC_DIR}/test.sh). Their output:\n{r.output.strip()[-1500:]}\n"
+                       f"Fix your work so they pass (if a test is clearly wrong about the task text, say so in your "
+                       f"submit message), then submit.")
+            self.trace.log("reopen", step=s.id, reason="acceptance_failed")
+            _, verdict, _ = await self._attempt(s, record, handoff, environment, bb)
+            record["passed"] = verdict.passed
+            bb.update(s.id, status="done" if verdict.passed else "failed")
 
     async def _env_summary(self, environment) -> str:
         try:

@@ -768,3 +768,31 @@ def test_ablation_switches_turn_prompt_features_off():
     assert "### USER" in model._query([{"role": "user", "content": "go"}]).choices[0].message.content
     cfg = load_config(team_roster="false", recency_reminder="false", output_guard="0", env_bootstrap="no")
     assert not any((cfg.team_roster, cfg.recency_reminder, cfg.output_guard, cfg.env_bootstrap))
+
+
+def test_acceptance_tests_run_beside_the_work_and_reopen_a_final_step_once(tmp_path):
+    cfg = load_config(policy="fixed:0", acceptance_model="anthropic/claude-opus-5-5")
+    box = {"ready": False, "fixed": False}
+    calls, trace = [], Trace(None)
+
+    def work(step, model_id, bb_text, out_path):
+        calls.append((step.id, model_id))
+        if step.id == "s1" and len([c for c in calls if c[0] == "s1"]) == 2:
+            box["fixed"] = True  # the re-opened attempt fixes what the acceptance tests found
+        return WorkerResult("Submitted", "", 1)
+
+    def handler(cmd):
+        if cmd.startswith("touch /tmp/steps/acc/ready"):
+            box["ready"] = True
+            return "", 0
+        if cmd == "bash /tmp/steps/acc/test.sh":
+            return ("FAIL: restart case" if not box["fixed"] else "all PASS"), 0 if box["fixed"] else 1
+        return "", 0  # own checks, the script syntax check and the gate pass
+
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "true")), work, tmp_path)
+    summary = asyncio.run(orch.run("task", FakeEnvironment(handler)))
+    assert ("acc", "anthropic/claude-opus-5-5") in calls and box["ready"]
+    assert summary["plan"][0]["check"].startswith("( true ) && { [ ! -f /tmp/steps/acc/ready ]")
+    assert [e["event"] for e in trace.events].count("reopen") == 1 and summary["steps"]["s1"]["passed"]
+    assert next(e for e in trace.events if e["event"] == "acceptance")["ready"] is True

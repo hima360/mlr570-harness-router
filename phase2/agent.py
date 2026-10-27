@@ -28,7 +28,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "fixer_model", "max_interventions", "context_budget_chars", "max_output_tokens",
                "submit_checks", "session_budget_chars",
                "merge_chains", "max_escalations", "max_run_cost_usd", "max_run_credits", "top_tier_budget_frac",
-               "reviewer_model", "team_roster", "recency_reminder", "output_guard", "env_bootstrap")
+               "reviewer_model", "team_roster", "recency_reminder", "output_guard", "env_bootstrap",
+               "acceptance_model", "acceptance_step_limit")
 
 
 class RoutedHarness(BaseAgent):

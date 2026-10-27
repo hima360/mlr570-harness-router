@@ -29,7 +29,9 @@ Do only your step. Other agents may work on other files at the same time, so onl
 your step needs{{writes_hint}}.{{outputs_hint}}
 
 If a command fails, try a different approach; never end your step without either submitting or publishing a
-blocker. Every response must contain exactly one bash command. Each command runs in a fresh shell in the
+blocker. The task's own tests run later, possibly as a non-root user in a fresh shell: make files you create
+readable, do not rely on your shell's state or environment variables, and leave services, background jobs and
+measurements in the state the task asks for (let a measurement finish before you submit). Every response must contain exactly one bash command. Each command runs in a fresh shell in the
 task container, so prefix with `cd /path && ...` when needed.{{format_hint}}
 When your step is done, run exactly:
 printf '""" + SUBMIT + """\\n<one or two sentences on what you did and which files changed>\\n'

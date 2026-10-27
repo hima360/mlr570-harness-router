@@ -586,6 +586,12 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
             if team["fork"] else "", f"{reviews} value review(s)" if reviews else "",
             f"{team['triage']} error-handler call(s)" if team["triage"] else "",
             f"{team['stop']} stop(s) to save budget" if team["stop"] else ""]
+    acc = next((e for e in events if e.get("event") == "acceptance"), None)
+    if any(e.get("event") == "acceptance_planned" for e in events):
+        bits.append("acceptance tests " + ("being written" if not acc else "ready" if acc.get("ready") else "FAILED to write"))
+    reopens = sum(1 for e in events if e.get("event") == "reopen")
+    if reopens:
+        bits.append(f"{reopens} step(s) re-opened by acceptance tests")
     if any(bits):
         t.append("Team      " + " · ".join(b for b in bits if b) + "\n", style="dim")
     turn_cap = cfg.get("worker_step_limit")

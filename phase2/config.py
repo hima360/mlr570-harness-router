@@ -69,6 +69,10 @@ class HarnessConfig:
     # A cheap model from another family that checks published facts against the transcript on submit
     # ("" = off). Its sends-back share the submit gate's submit_checks.
     reviewer_model: str = ""
+    # An independent agent writes acceptance tests from the task text in parallel ("" = off); final steps must
+    # pass them once they are ready.
+    acceptance_model: str = ""
+    acceptance_step_limit: int = 15
     # Ablation switches for prompt features (all on by default)
     team_roster: bool = True       # TEAM roster lines in each worker's first prompt
     recency_reminder: bool = True  # step + one-command rule restated at the end of every call
@@ -123,7 +127,7 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
             setattr(cfg, name, (int if f.type in (int, "int") else float)(value))
     from .droid import is_droid
 
-    missing = [m for m in cfg.tiers + [cfg.planner_model] + [x for x in (cfg.fixer_model, cfg.reviewer_model) if x]
+    missing = [m for m in cfg.tiers + [cfg.planner_model] + [x for x in (cfg.fixer_model, cfg.reviewer_model, cfg.acceptance_model) if x]
                if not is_droid(m) and m not in cfg.prices_per_million]
     if missing:
         raise ValueError(f"no price for models: {missing}")

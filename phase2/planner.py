@@ -40,7 +40,8 @@ writable; do not list it in writes). Every step needs a real check: the verifier
 whether the step is done, and a failed check moves the step to a stronger model. A step that only
 investigates declares what it finds as fact outputs, and its check greps outputs.txt for the concrete
 value (for example grep -Eq '^seed=[0-9a-f]{{8}}$' /tmp/steps/s1/outputs.txt), not just that it exists.
-A check must fail for a plausible WRONG answer, not only a malformed one: recompute or cross-check the
+A check must cover the scenarios the task names (failure and restart cases, edge cases, limits under load),
+not only the normal path. A check must fail for a plausible WRONG answer, not only a malformed one: recompute or cross-check the
 value against the source data (for example regenerate the observed domains from the seed, or decrypt a
 known sample with the key). A format-only check lets a wrong value flow into every later step.
 If the steps would only form a chain with no parallel work, prefer fewer, larger steps (2 or 3).
