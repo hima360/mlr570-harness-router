@@ -198,7 +198,12 @@ def make_plan(instruction: str, env_summary: str, ask, max_steps: int) -> tuple[
     info = {"attempts": 0, "fallback": False, "errors": []}
     for _ in range(2):
         info["attempts"] += 1
-        reply = ask(messages)
+        try:
+            reply = ask(messages)
+        except Exception as e:  # a refused or failed planner call (2026-10-26: Claude's cyber classifier
+            # refused Opus on legacy-utility-triage and the whole trial crashed): run the task as one step
+            info["errors"].append(f"planner call failed: {type(e).__name__}: {str(e)[-300:]}")
+            break
         try:
             return parse_plan(reply, max_steps), info
         except PlanError as e:

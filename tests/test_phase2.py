@@ -663,3 +663,16 @@ def test_pure_chain_is_merged_into_one_checklist_step(tmp_path):
                          lambda m: plan_json(("s1", [], [], "c1"), ("s2", [], [], "c2")), work, tmp_path)
     asyncio.run(orch2.run("task", FakeEnvironment()))
     assert sorted(s.id for s in seen) == ["s1", "s2"]
+
+
+def test_planner_failure_falls_back_to_one_step_and_one_step_skips_the_planner(tmp_path):
+    def refused(messages):
+        raise RuntimeError("claude -p failed: [cyber]")
+
+    plan, info = make_plan("the task", "ls", refused, 8)
+    assert info["fallback"] and plan.steps[0].goal == "the task" and "planner call failed" in info["errors"][0]
+    cfg = load_config(policy="fixed:0", max_plan_steps=1)
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), Trace(None), Router(cfg, laya=None, arch=None),
+                        refused, lambda *a: WorkerResult("Submitted", "", 1), tmp_path)
+    summary = asyncio.run(orch.run("task", FakeEnvironment()))
+    assert summary["plan_info"]["planner"] == "skipped" and summary["steps"]["s1"]["passed"]

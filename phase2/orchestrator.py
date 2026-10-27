@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from .blackboard import Blackboard, facts_text
-from .planner import load_pinned_plan, make_plan, merge_chain, plan_shape, topo_order
+from .planner import load_pinned_plan, make_plan, merge_chain, plan_shape, single_step_plan, topo_order
 from .scheduler import run_dag
 from .verifier import Verdict, read_outputs, steps_dir, verify
 
@@ -71,6 +71,9 @@ class Orchestrator:
         if self.cfg.plan_from:  # same DAG as an earlier run: only the routing policy differs
             plan = load_pinned_plan(self.cfg.plan_from, self.cfg.max_plan_steps)
             plan_info = {"attempts": 0, "fallback": False, "errors": [], "pinned_from": str(self.cfg.plan_from)}
+        elif self.cfg.max_plan_steps <= 1:  # nothing to plan: one agent does the task (keeps baselines pure)
+            plan = single_step_plan(instruction)
+            plan_info = {"attempts": 0, "fallback": False, "errors": [], "planner": "skipped"}
         else:
             plan, plan_info = await asyncio.to_thread(
                 make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
