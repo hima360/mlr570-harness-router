@@ -65,7 +65,7 @@ class Blackboard:
 
         return updates
 
-    def summary_for(self, step_id: str, depends_on=()) -> str:
+    def summary_for(self, step_id: str, depends_on=(), roster: bool = True) -> str:
         """What a worker sees about the other steps (its own history stays private). Finished steps
         show their published facts (up to 2,000 chars for a dependency, 400 otherwise) rather than a
         cut summary; a failed dependency says so and what to do about it."""
@@ -74,7 +74,7 @@ class Blackboard:
             me = self.entries.get(step_id)
             waiting = [f"{sid} (needs: {', '.join(e.promises) or 'your work'})" if me and me.promises else sid
                        for sid, e in self.entries.items() if step_id in e.depends_on]
-            if len(self.entries) > 1:
+            if roster and len(self.entries) > 1:
                 lines.append(f"TEAM: {len(self.entries)} agents share this task; each owns the files listed and "
                              f"publishes the results listed. YOU are {step_id}."
                              + (f" You build on: {', '.join(depends_on)}." if depends_on else "")
@@ -85,7 +85,7 @@ class Blackboard:
                 if sid == step_id:
                     continue
                 dep = sid in depends_on
-                role = (f"\n  owns: {', '.join(e.writes) or 'nothing (reads only)'}; publishes: "
+                role = "" if not roster else (f"\n  owns: {', '.join(e.writes) or 'nothing (reads only)'}; publishes: "
                         f"{', '.join(e.promises) or '-'}" + (f"; builds on: {', '.join(e.depends_on)}" if e.depends_on else ""))
                 head = (f"- {sid} [{e.status}{', ' + e.model.split('/')[-1] if e.model else ''}]"
                         f"{' (your step needs this)' if dep else ''} {e.goal[:200]}{role}")

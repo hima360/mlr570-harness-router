@@ -277,7 +277,7 @@ def remind(messages: list[dict], reminder: str, update: str = "") -> list[dict]:
 
 def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
                     reminder: str = "", step_limit: int = 0, session_budget_chars: int = 0,
-                    fork_from: dict | None = None, team_feed=None, budget_fn=None):
+                    fork_from: dict | None = None, team_feed=None, budget_fn=None, output_guard: bool = True):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -350,7 +350,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
             guard.progress()
             if usage.get("truncated"):  # pi-mono runs none of a reply cut at the output limit
                 text = text.split("```mswea_bash_command")[0] + "\n(reply cut at the output limit; nothing was run)"
-            text, guarded = guard_reply(text)
+            text, guarded = guard_reply(text) if output_guard else (text, "")
             guarded = "+".join(x for x in ("truncated" if usage.get("truncated") else "", guarded) if x)
             if session:
                 session.guarded = bool(guarded)

@@ -68,7 +68,8 @@ class Orchestrator:
     async def run(self, instruction: str, environment) -> dict:
         env_summary = await self._env_summary(environment)
         # Droid: show the starting state as command output so workers do not re-run the same listing.
-        self.env_block = f"\n\nAlready run at the start (do not repeat): pwd && ls -la\n{env_summary[:1500]}"
+        self.env_block = (f"\n\nAlready run at the start (do not repeat): pwd && ls -la\n{env_summary[:1500]}"
+                          if self.cfg.env_bootstrap else "")
         if self.cfg.plan_from:  # same DAG as an earlier run: only the routing policy differs
             plan = load_pinned_plan(self.cfg.plan_from, self.cfg.max_plan_steps)
             plan_info = {"attempts": 0, "fallback": False, "errors": [], "pinned_from": str(self.cfg.plan_from)}
@@ -196,7 +197,7 @@ class Orchestrator:
         model_id = self.cfg.tiers[tier]
         bb.update(step.id, status="running", tier=tier, model=model_id, attempts=n)
         out_path = (self.logs_dir / f"worker_{step.id}_a{n}.json") if self.logs_dir else None
-        team = bb.summary_for(step.id, step.depends_on)
+        team = bb.summary_for(step.id, step.depends_on, roster=self.cfg.team_roster)
         parent = (self.records.get(step.continues) or {}).get("session") if step.continues and n == 1 else None
         if parent and parent.get("backend") and parent["backend"] == backend_of(model_id):
             step = step.model_copy(update={"fork_from": parent})

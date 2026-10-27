@@ -69,6 +69,11 @@ class HarnessConfig:
     # A cheap model from another family that checks published facts against the transcript on submit
     # ("" = off). Its sends-back share the submit gate's submit_checks.
     reviewer_model: str = ""
+    # Ablation switches for prompt features (all on by default)
+    team_roster: bool = True       # TEAM roster lines in each worker's first prompt
+    recency_reminder: bool = True  # step + one-command rule restated at the end of every call
+    output_guard: bool = True      # cut replies at invented turns / extra command blocks
+    env_bootstrap: bool = True     # the starting directory listing shown as already-run output
     # CLI workers: once a conversation outgrows this, older turns are folded into PROGRESS SO FAR.
     # 0 = off. ~32k chars is ~11-13k tokens with CLI overhead (measured 2.7-3.3 chars/token).
     context_budget_chars: int = 32000

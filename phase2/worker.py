@@ -252,7 +252,7 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
         return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
                                context_budget_chars=cfg.context_budget_chars, reminder=reminder,
                                step_limit=step_limit, session_budget_chars=cfg.session_budget_chars,
-                               fork_from=fork_from, team_feed=team_feed,
+                               fork_from=fork_from, team_feed=team_feed, output_guard=cfg.output_guard,
                                budget_fn=(lambda: budget_exceeded(cfg, ledger)) if ledger is not None else None)
     guard = IdleGuard(cfg.step_idle_sec)
 
@@ -287,7 +287,7 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
 
     from .verifier import steps_dir
 
-    reminder = (f"Your step ({step.id}): {' '.join(step.goal.split())[:300]} Reply with a short THOUGHT and exactly "
+    reminder = "" if not cfg.recency_reminder else (f"Your step ({step.id}): {' '.join(step.goal.split())[:300]} Reply with a short THOUGHT and exactly "
                 f"one command block. Publish results in {steps_dir(step.id)}/outputs.txt; submit when done.")
     model = model or _make_model(cfg, ledger, model_id, on_call, effort="low" if step.effort == "low" else None,
                                  reminder=reminder, step_limit=step.worker_step_limit or cfg.worker_step_limit,

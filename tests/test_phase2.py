@@ -751,3 +751,20 @@ def test_live_team_update_reaches_the_model_call():
     model._query([{"role": "user", "content": "go"}])
     assert "TEAM UPDATE: s1 finished" in seen[0] and seen[0].index("TEAM UPDATE") < seen[0].index("[Reminder]")
     assert "TEAM UPDATE" not in seen[1]
+
+
+def test_ablation_switches_turn_prompt_features_off():
+    from phase2 import cli_models
+    from phase2.blackboard import Blackboard
+
+    bb = Blackboard(task="t")
+    bb.add("s1", "a", ["x.py"], [], [])
+    bb.add("s2", "b", ["y.py"], [], ["s1"])
+    assert "TEAM:" in bb.summary_for("s1") and "TEAM:" not in bb.summary_for("s1", roster=False)
+    assert "owns:" not in bb.summary_for("s1", roster=False)
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, output_guard=False,
+                                       complete_fn=lambda m, msgs: ("A\n```mswea_bash_command\nls\n```\n### USER\nB",
+                                                                    {"prompt_tokens": 1, "completion_tokens": 1}))
+    assert "### USER" in model._query([{"role": "user", "content": "go"}]).choices[0].message.content
+    cfg = load_config(team_roster="false", recency_reminder="false", output_guard="0", env_bootstrap="no")
+    assert not any((cfg.team_roster, cfg.recency_reminder, cfg.output_guard, cfg.env_bootstrap))
