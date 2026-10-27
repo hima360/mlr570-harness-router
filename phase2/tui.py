@@ -466,8 +466,13 @@ def step_states(events: list[dict], now_t: float) -> list[dict]:
     plan = next((e for e in events if e.get("event") == "plan"), None)
     if not plan:
         return []
+    steps = plan["steps"]
+    merged = next((e for e in events if e.get("event") == "merged"), None)
+    if merged:  # a pure chain ran as one step
+        steps = [{"id": merged["into"], "depends_on": [],
+                  "goal": f"all {len(merged['parts'])} planned parts as one step: " + steps[0]["goal"]}]
     out = []
-    for s in plan["steps"]:
+    for s in steps:
         sid = s["id"]
         mine = [e for e in events if e.get("step") == sid]
         route = next((e for e in mine if e.get("event") == "route"), None)
@@ -475,8 +480,9 @@ def step_states(events: list[dict], now_t: float) -> list[dict]:
         calls = [e for e in mine if e.get("event") == "llm_call"]
         escalations = [e for e in mine if e.get("event") == "escalate"]
         failures = [e for e in mine if e.get("event") == "llm_call_failed"]
-        done = any(a.get("passed") for a in attempts)
-        over = done or (attempts and len(attempts) > len(escalations))
+        end = next((e for e in mine if e.get("event") == "step_end"), None)
+        done = end["passed"] if end else any(a.get("passed") for a in attempts)
+        over = bool(end) or done or (attempts and len(attempts) > len(escalations))
         state = ("done" if done else "failed" if over else "retrying" if escalations
                  else "working" if route else "waiting")
         model = (route or {}).get("model") or (attempts[-1].get("model") if attempts else None)
@@ -525,6 +531,19 @@ def trace_now(job, events: list[dict]) -> float:
     return (_time.time() - start) if job.status == "running" else events[-1]["t"]
 
 
+def spend(events: list[dict], step_id: str | None = None) -> dict:
+    """Model spend from the trace: list-price USD, Factory credits, input tokens and the cached share."""
+    calls = [e for e in events if e.get("event") == "llm_call" and (step_id is None or e.get("step") == step_id)]
+    inp = sum(e.get("input_tokens") or 0 for e in calls)
+    return {"usd": sum(e.get("cost_usd") or 0 for e in calls), "credits": sum(e.get("factory_credits") or 0 for e in calls),
+            "input": inp, "cached": sum(e.get("cached_tokens") or 0 for e in calls), "calls": len(calls)}
+
+
+def spend_text(s: dict) -> str:
+    parts = ([f"${s['usd']:.2f}"] if s["usd"] else []) + ([f"{s['credits']:,.0f} credits"] if s["credits"] else [])
+    return " + ".join(parts) or "$0.00"
+
+
 def progress_panel(events: list[dict], now_t: float, status: str = "running", reward=None) -> Text:
     """The top panel: what the run is doing right now, in plain words, with a progress bar."""
     cfg = next((e for e in events if e.get("event") == "config"), {})
@@ -552,12 +571,29 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
     t.append("░" * (width - filled), style="dim")
     t.append(f"  {n_done} of {len(steps)} steps done" + (f", {n_fail} failed" if n_fail else ""))
     t.append(f"   ·   {'running for' if status == 'running' else 'ran for'} {_clock(now_t)}\n", style="dim")
+    total = spend(events)
+    caps = [f"${cfg['max_run_cost_usd']:.2f}" if cfg.get("max_run_cost_usd") else "",
+            f"{cfg['max_run_credits']:,.0f} credits" if cfg.get("max_run_credits") else ""]
+    cap = " / ".join(c for c in caps if c)
+    line = f"Spent     {spend_text(total)}" + (f" of {cap} cap" if cap else "")
+    if total["input"]:
+        line += f"   ·   {100 * total['cached'] / total['input']:.0f}% of input from cache"
+    t.append(line + "\n", style="dim")
+    team = {k: sum(1 for e in events if e.get("event") == k) for k in ("fork", "triage", "rerun", "stop")}
+    updates = sum(1 for e in events if e.get("event") == "llm_call" and e.get("team_update"))
+    reviews = sum(1 for e in events if e.get("event") == "llm_call" and e.get("purpose") == "review")
+    bits = [f"{updates} team update(s)" if updates else "", f"{team['fork']} step(s) continued a teammate's memory"
+            if team["fork"] else "", f"{reviews} value review(s)" if reviews else "",
+            f"{team['triage']} error-handler call(s)" if team["triage"] else "",
+            f"{team['stop']} stop(s) to save budget" if team["stop"] else ""]
+    if any(bits):
+        t.append("Team      " + " · ".join(b for b in bits if b) + "\n", style="dim")
     turn_cap = cfg.get("worker_step_limit")
     time_cap = cfg.get("step_wall_time_sec")
     idle_cap = cfg.get("step_idle_sec")
     for i, s in enumerate(steps, 1):
         icon, style, word = STATE_LOOK[s["state"]]
-        t.append(f"  {icon} Step {i}  ", style=style)
+        t.append(f"  {icon} Step {i} ({s['id']})  ", style=style)
         t.append(_short(first_sentence(s["goal"], 70), 70))
         t.append("\n")
         who = pretty_model(s["model"]) if s["model"] else ""
@@ -585,7 +621,8 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
         elif s["state"] == "stopped":
             t.append(f"           {word}: {who} had taken {s['actions']} actions\n", style="dim")
         else:
-            line = f"           {word} by {who} in {_clock(s['elapsed'])} · {s['actions']} actions"
+            line = (f"           {word} by {who} in {_clock(s['elapsed'])} · {s['actions']} actions"
+                    f" · {spend_text(spend(events, s['id']))}")
             if s["attempt"] > 1:
                 line += f" · needed {s['attempt'] - 1} escalation(s)"
             t.append(line + "\n", style="dim")
@@ -593,6 +630,9 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
         if reward is not None:
             verdict = "passed" if reward == 1 else "did not pass"
             t.append(f"\nTerminal-Bench result: {verdict} (score {reward})", style="bold")
+            if reward == 1 and n_fail:
+                t.append(f"\n(The task passed although {n_fail} step(s) failed their own check: the planner's "
+                         "check was stricter than, or different from, the task's tests.)", style="dim")
         else:
             t.append(f"\nRun ended: {status}", style="bold")
     return t

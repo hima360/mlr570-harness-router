@@ -186,6 +186,7 @@ class Orchestrator:
                                to_model=self.cfg.tiers[record["tier"] + 1], chars=len(handoff))
             record["tier"] += 1
         bb.update(step.id, status="done" if record["passed"] else "failed")
+        self.trace.log("step_end", step=step.id, passed=record["passed"], attempts=len(record["attempts"]))
         return record
 
     async def _attempt(self, step, record, handoff, environment, bb):
