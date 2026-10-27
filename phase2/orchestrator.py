@@ -14,6 +14,7 @@ from pathlib import Path
 from .blackboard import Blackboard, facts_text
 from .planner import load_pinned_plan, make_plan, merge_chain, plan_shape, single_step_plan, topo_order
 from .scheduler import run_dag
+from .cli_models import backend_of
 from .verifier import Verdict, read_outputs, steps_dir, verify
 
 
@@ -85,7 +86,8 @@ class Orchestrator:
                 await environment.exec(f"mkdir -p {steps_dir(s.id)}", timeout_sec=30)
             except Exception:
                 pass
-        if self.cfg.merge_chains and len(plan.steps) > 1 and shape["parallelism"] <= 1.0:
+        if (self.cfg.merge_chains and len(plan.steps) > 1 and shape["parallelism"] <= 1.0
+                and not any(s.continues for s in plan.steps)):  # continued chains keep their memory: no merge
             parts = [s.id for s in plan.steps]
             plan = merge_chain(plan, self.cfg.worker_step_limit, self.cfg.step_wall_time_sec)
             self.trace.log("merged", parts=parts, into=plan.steps[0].id,
@@ -194,6 +196,10 @@ class Orchestrator:
         bb.update(step.id, status="running", tier=tier, model=model_id, attempts=n)
         out_path = (self.logs_dir / f"worker_{step.id}_a{n}.json") if self.logs_dir else None
         team = bb.summary_for(step.id, step.depends_on)
+        parent = (self.records.get(step.continues) or {}).get("session") if step.continues and n == 1 else None
+        if parent and parent.get("backend") and parent["backend"] == backend_of(model_id):
+            step = step.model_copy(update={"fork_from": parent})
+            self.trace.log("fork", step=step.id, parent=step.continues, model=model_id)
         result = await asyncio.to_thread(self.work, step, model_id, team + self.env_block + handoff, out_path)
         outputs, missing = await read_outputs(environment, step)
         if missing and result.exit_status in ("Submitted", "LimitsExceeded"):
@@ -208,6 +214,8 @@ class Orchestrator:
                        outputs={k: v[:200] for k, v in outputs.items()}, missing_outputs=missing)
         record["attempts"].append({"tier": tier, "model": model_id, "exit_status": result.exit_status,
                                    "passed": verdict.passed, "n_calls": result.n_calls})
+        if verdict.passed and result.session:
+            record["session"] = result.session  # a later step that continues this one forks it
         bb.update(step.id, summary=result.summary, check_output=verdict.output[-500:], outputs=outputs)
         self.on_progress()
         return result, verdict, out_path

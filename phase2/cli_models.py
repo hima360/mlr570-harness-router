@@ -16,6 +16,10 @@ PROMPT_HEADER = ("You are acting as a plain language model inside another progra
                  "the conversation below, following its instructions exactly.\n\n")
 
 
+def backend_of(model: str) -> str:
+    return model.split("/", 1)[0] if model.startswith(("droid/", "claude/")) else ""
+
+
 def delta_text(messages: list[dict]) -> str:
     """The new user turns of a resumed CLI session, as one plain prompt (the session already holds the
     earlier turns and the model's own replies)."""
@@ -30,11 +34,14 @@ class CliSession:
     Droid reports usage cumulatively over the session and Claude Code reports total_cost_usd cumulatively,
     so `per_call` turns running totals into this call's share."""
 
-    def __init__(self):
+    def __init__(self, fork_from: dict | None = None):
         import tempfile
 
         self.id: str | None = None
-        self.dir = tempfile.mkdtemp(prefix="phase2-session-")  # resume finds sessions by working directory
+        # resume finds sessions by working directory: a fork runs where its parent session lives
+        self.dir = (fork_from or {}).get("dir") or tempfile.mkdtemp(prefix="phase2-session-")
+        self.fork_from = fork_from    # {"id", "backend", "dir", "chars", "cost_total"} of the continued step
+        self.seed: dict = {}          # running totals a fork inherits (Claude counts the parent's cost)
         self.system = ""      # the first call's system prompt, re-sent unchanged so the cached prefix holds
         self.seen = 0         # mini-swe-agent messages already in the session
         self.chars = 0        # rough size of the session's context
@@ -43,8 +50,8 @@ class CliSession:
         self.resets = 0
 
     def per_call(self, values: dict, session_id: str | None, keys) -> dict:
-        if session_id != self.id:  # a new session starts its running totals from zero
-            self.totals = {}
+        if session_id != self.id:  # a new session starts its running totals from zero (or a fork's seed)
+            self.totals = dict(self.seed)
         out = dict(values)
         for k in keys:
             total = values.get(k) or 0
@@ -54,7 +61,7 @@ class CliSession:
         return out
 
     def reset(self) -> None:
-        self.id, self.totals, self.chars = None, {}, 0
+        self.id, self.totals, self.chars, self.fork_from, self.seed = None, {}, 0, None, {}
         self.resets += 1
 
 
@@ -262,7 +269,8 @@ def remind(messages: list[dict], reminder: str) -> list[dict]:
 
 
 def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
-                    reminder: str = "", step_limit: int = 0, session_budget_chars: int = 0):
+                    reminder: str = "", step_limit: int = 0, session_budget_chars: int = 0,
+                    fork_from: dict | None = None):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -272,7 +280,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
     complete_fn = complete_fn or complete_fn_for(model)
     guard = IdleGuard(idle_sec)
     calls = [0]
-    session = CliSession() if session_budget_chars else None
+    session = CliSession(fork_from) if session_budget_chars else None
 
     def session_call(messages, note):
         """Send only the turns the CLI session has not seen; once the session outgrows its budget, start a
@@ -284,7 +292,10 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
             return sum(len(str(m.get("content") or "")) for m in ms)
 
         delta = [m for m in messages[session.seen:] if m.get("role") != "assistant"]
-        if session.id and session.chars + size(delta) <= session_budget_chars:
+        if session.fork_from and not session.id:  # first call of a continued step: fork the parent session
+            payload, kind = [m for m in messages if m.get("role") != "system"], "fork"
+            session.chars = session.fork_from.get("chars", 0)
+        elif session.id and session.chars + size(delta) <= session_budget_chars:
             if session.guarded:
                 delta = [{"role": "user", "content": "(Only the first command of your last reply was run.)"}, *delta]
             payload, kind = delta, "resume"
@@ -299,11 +310,12 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
         except Exception:
             if kind == "new":
                 raise
+            # a lost session or a failed fork: start again from the compacted view
             session.reset()  # a lost or broken session: start again from the compacted view
             payload, kind = compact_messages(messages, context_budget_chars), "new"
             text, usage = complete_fn(model, remind(payload, note), session=session)
         session.seen = len(messages)
-        session.chars = (session.chars if kind == "resume" else 0) + size(payload) + len(text)
+        session.chars = (session.chars if kind in ("resume", "fork") else 0) + size(payload) + len(text)
         return text, {**usage, "session": kind}
 
     class CliTextModel(LitellmTextbasedModel):
@@ -343,4 +355,6 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
             # prints a "Provider List" error on every lookup.
             return {"cost": 0.0}
 
-    return CliTextModel(model_name=model, cost_tracking="ignore_errors")
+    m = CliTextModel(model_name=model, cost_tracking="ignore_errors")
+    m.cli_session = session
+    return m

@@ -680,3 +680,33 @@ def test_text_model_session_resumes_then_restarts_past_its_budget_and_after_erro
     kinds = [k for k, _ in sent]
     assert kinds == ["new", "resume", "resume", "new", "new"]
     assert sent[1][1] == ["obs1"] and sent[3][1][0] == "s" and len(sent[4][1]) == len(msgs)
+
+
+def test_continued_step_forks_the_parent_session_on_the_same_backend():
+    from phase2 import claude_code
+    from phase2.cli_models import CliSession
+
+    calls = []
+
+    def run(argv, input=None, **kw):
+        calls.append((argv, input))
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "CHILD", input_tokens=2,
+                                           output_tokens=3, cost=0.0064), stderr="")
+
+    parent = {"id": "PARENT", "backend": "claude", "dir": "/tmp", "chars": 5000, "cost_total": 0.0002}
+    s = CliSession(parent)
+    _, u = claude_code.complete("claude/claude-sonnet-5-5", [{"role": "user", "content": "your new step"}],
+                                run=run, session=s)
+    argv = calls[0][0]
+    assert argv[argv.index("--resume") + 1] == "PARENT" and "--fork-session" in argv and calls[0][1] == "your new step"
+    assert s.id == "CHILD" and abs(u["claude_code_cost_usd"] - 0.0062) < 1e-9  # parent's cost not counted twice
+
+    dcalls = []
+
+    def drun(argv, cwd=None, **kw):
+        dcalls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "DCHILD", factory_credits=50), stderr="")
+
+    ds = CliSession({"id": "DPARENT", "backend": "droid", "dir": "/tmp", "chars": 10})
+    droid.complete("droid/claude-haiku-5-5", [{"role": "user", "content": "x"}], run=drun, session=ds)
+    assert dcalls[0][dcalls[0].index("--fork") + 1] == "DPARENT" and "-s" not in dcalls[0]

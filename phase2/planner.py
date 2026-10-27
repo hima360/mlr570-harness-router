@@ -8,6 +8,17 @@ from pydantic import BaseModel, Field, ValidationError
 PLANNER_PROMPT = """You are planning work for a team of coding agents that share one Linux machine.
 Split the task into a small number of steps (at most {max_steps}). Use one step if the task is small.
 
+Think in two passes. First list the task's independent WORKSTREAMS: parts that touch different files,
+components, inputs or questions and can be done without each other's results (separate modules or bugs,
+separate analyses of different inputs, an implementation and its tests against an agreed interface).
+Each workstream becomes its own step(s) with no dependency on the other workstreams, so they run at the
+same time; when two parallel steps build pieces that must fit together, state the shared interface
+(function names, file formats, paths) in both goals. A final step depends on them only if it consumes
+their results. Splitting is worth it only when steps can run at the same time, or when a clearly easy
+part (writing up or formatting results already found) can go to a cheaper model: then mark that later
+step "continues": "<id of the step whose work it carries on>", and it keeps that step's full working
+memory instead of starting fresh. If there is no parallel work and no easy part, use ONE step.
+
 For each step give:
 - id: short unique id like "s1"
 - goal: what this step must achieve, self-contained, specific enough to act on alone
@@ -17,6 +28,8 @@ For each step give:
   as 8 hex chars"}} or {{"name": "solver", "kind": "file", "path": "/app/solve.py", "about": "..."}}; [] if none
 - check: one shell command that exits 0 only if the step succeeded
 - effort: "low" only for steps that just assemble or write results other steps already found; omit otherwise
+- continues: optional id of one step in depends_on whose line of work this step carries on (it then
+  continues that step's working memory); omit otherwise
 
 Before chaining steps, ask what each step needs to know. If another step finds it (a key, a seed, a
 host, a decoded file), depend on that step and name it as one of that step's outputs. Steps that need
@@ -42,7 +55,8 @@ Task:
 Current directory listing:
 {env_summary}
 
-Reply with only JSON: {{"steps": [{{"id": "...", "goal": "...", "depends_on": [], "writes": [], "outputs": [], "check": ""}}]}}"""
+Reply with only JSON: {{"workstreams": ["..."], "steps": [{{"id": "...", "goal": "...", "depends_on": [], "writes": [],
+"outputs": [], "check": ""}}]}}"""
 
 REPAIR_PROMPT = """Your plan was rejected: {error}
 Reply with only the corrected JSON plan in the same format."""
@@ -64,9 +78,11 @@ class Step(BaseModel):
     outputs: list[Output] = []
     check: str = ""
     effort: str = ""  # "low": the worker runs at low reasoning effort (assembling known results)
+    continues: str = ""  # a step in depends_on whose CLI session this step forks (keeps its working memory)
     # Set by the harness only (repair turns, merged chains); not part of the plan.
     worker_step_limit: int | None = Field(default=None, exclude=True)
     wall_time_sec: int | None = Field(default=None, exclude=True)
+    fork_from: dict | None = Field(default=None, exclude=True)  # the continued step's session (set by the harness)
 
 
 class Plan(BaseModel):
@@ -95,6 +111,8 @@ def parse_plan(text: str, max_steps: int) -> Plan:
         unknown = set(s.depends_on) - set(ids)
         if unknown:
             raise PlanError(f"step {s.id} depends on unknown steps {sorted(unknown)}")
+        if s.continues and s.continues not in s.depends_on:
+            raise PlanError(f"step {s.id} continues {s.continues!r}, which is not in its depends_on")
         names = [o.name for o in s.outputs]
         if len(set(names)) != len(names):
             raise PlanError(f"step {s.id} has duplicate output names")

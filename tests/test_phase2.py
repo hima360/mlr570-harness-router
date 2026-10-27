@@ -694,3 +694,26 @@ def test_spend_caps_stop_new_work_and_gate_the_top_tier(tmp_path):
     assert all(m == cfg.tiers[2] for _, m in models)  # never escalated into the top tier
     assert ("s1", "top_tier_budget") in stops or ("s1", "budget") in stops
     assert orch.over_budget() and len(models) <= 2
+
+
+def test_continues_must_name_a_dependency_and_continued_chains_are_not_merged(tmp_path):
+    bad = json.dumps({"steps": [{"id": "s1", "goal": "a", "check": "true"},
+                                {"id": "s2", "goal": "b", "continues": "s1", "check": "true"}]})
+    with pytest.raises(PlanError, match="not in its depends_on"):
+        parse_plan(bad, 8)
+    good = json.dumps({"workstreams": ["one"], "steps": [{"id": "s1", "goal": "a", "check": "true"},
+                       {"id": "s2", "goal": "b", "depends_on": ["s1"], "continues": "s1", "check": "true"}]})
+    cfg = load_config(policy="fixed:0", merge_chains=True)
+    seen = []
+
+    def work(step, model_id, *a):
+        seen.append((step.id, step.fork_from))
+        return WorkerResult("Submitted", "", 1, {"id": "S1", "backend": "", "dir": "/tmp", "chars": 1, "cost_total": 0})
+
+    trace = Trace(None)
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: good, work, tmp_path)
+    asyncio.run(orch.run("task", FakeEnvironment()))
+    assert [s for s, _ in seen] == ["s1", "s2"]  # not merged
+    # zai/ models have no CLI session backend, so no fork is attempted
+    assert seen[1][1] is None and not any(e["event"] == "fork" for e in trace.events)

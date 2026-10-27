@@ -29,10 +29,13 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
     With a `CliSession`, a call resumes that session (`--resume`) and `messages` are only the new turns."""
     model_id = model[len(PREFIX):] if is_claude_code(model) else model
     resume = bool(session is not None and session.id)
+    fork = bool(session is not None and not session.id and session.fork_from)
+    if fork:  # total_cost_usd of a fork includes the parent's cost (measured 2026-10-27)
+        session.seed = {"cost": session.fork_from.get("cost_total", 0.0)}
     system = "\n\n".join(str(m.get("content") or "") for m in messages if m.get("role") == "system")
     rest = [m for m in messages if m.get("role") != "system"]
     if session is not None:  # the system prompt is the start of the cached prefix: keep it byte-identical
-        system = session.system if resume else system
+        system = session.system if resume else system  # a fork keeps the parent's own system prompt
         session.system = system
     env = {k: v for k, v in os.environ.items() if k not in API_ENV_VARS}
     if max_output_tokens:  # cheap tiers must not write 16k-token replies (they hit the call timeout)
@@ -43,11 +46,12 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
                 "--safe-mode", "--strict-mcp-config",
                 "--system-prompt", (PROMPT_HEADER + system).strip()] + (["--effort", effort] if effort else []) + \
                (["--resume", session.id] if resume else []) + \
+               (["--resume", session.fork_from["id"], "--fork-session"] if fork else []) + \
                (["--no-session-persistence"] if session is None else [])
 
         def call(extra=()):
             msgs = [*rest, *extra]
-            return run(argv, input=delta_text(msgs) if resume else serialize(msgs, header=""), cwd=d, env=env,
+            return run(argv, input=delta_text(msgs) if (resume or fork) else serialize(msgs, header=""), cwd=d, env=env,
                        capture_output=True, text=True, timeout=timeout)
 
         result = run_cli(call, "claude -p", model=model,

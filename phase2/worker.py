@@ -96,6 +96,7 @@ class WorkerResult:
     exit_status: str  # Submitted | LimitsExceeded | error type
     summary: str
     n_calls: int
+    session: dict | None = None  # the CLI session the attempt ended in, for a step that continues it
 
 
 LINE_CAP = 1000  # oh-my-pi cuts lines at 768 bytes: one minified line must not fill the whole budget
@@ -215,7 +216,7 @@ your_command_here
 
 
 def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None, reminder: str = "",
-                step_limit: int = 0):
+                step_limit: int = 0, fork_from: dict | None = None):
     import time
 
     from minisweagent.models.litellm_model import LitellmModel
@@ -236,7 +237,8 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
             complete = functools.partial(complete_fn_for(model_id), effort=effort, timeout=cfg.cli_timeout_sec)
         return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
                                context_budget_chars=cfg.context_budget_chars, reminder=reminder,
-                               step_limit=step_limit, session_budget_chars=cfg.session_budget_chars)
+                               step_limit=step_limit, session_budget_chars=cfg.session_budget_chars,
+                               fork_from=fork_from)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):
@@ -273,7 +275,8 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     reminder = (f"Your step ({step.id}): {' '.join(step.goal.split())[:300]} Reply with a short THOUGHT and exactly "
                 f"one command block. Publish results in {steps_dir(step.id)}/outputs.txt; submit when done.")
     model = model or _make_model(cfg, ledger, model_id, on_call, effort="low" if step.effort == "low" else None,
-                                 reminder=reminder, step_limit=step.worker_step_limit or cfg.worker_step_limit)
+                                 reminder=reminder, step_limit=step.worker_step_limit or cfg.worker_step_limit,
+                                 fork_from=step.fork_from)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""
@@ -289,9 +292,19 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
                          blackboard=blackboard_text, writes_hint=writes_hint,
                          outputs_hint=outputs_hint(step), format_hint=format_hint) or {}
     except Exception as e:
-        return WorkerResult(type(e).__name__, str(e)[:500], agent.n_calls)
+        return WorkerResult(type(e).__name__, str(e)[:500], agent.n_calls, _session_info(model, model_id))
     return WorkerResult(info.get("exit_status", "unknown"), (info.get("submission") or "").strip(),
-                        agent.n_calls)
+                        agent.n_calls, _session_info(model, model_id))
+
+
+def _session_info(model, model_id: str) -> dict | None:
+    from .cli_models import backend_of
+
+    s = getattr(model, "cli_session", None)
+    if s is None or not s.id:
+        return None
+    return {"id": s.id, "backend": backend_of(model_id), "dir": s.dir, "chars": s.chars,
+            "cost_total": s.totals.get("cost", 0.0)}
 
 
 def attempt_digest(messages: list[dict], max_chars: int = 5000) -> str:

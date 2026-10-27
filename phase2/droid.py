@@ -37,10 +37,11 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
     With a `CliSession`, a call continues that session (`-s`) and `messages` are only the new turns."""
     model_id = model[len(PREFIX):] if is_droid(model) else model
     resume = bool(session is not None and session.id)
+    fork = bool(session is not None and not session.id and session.fork_from)
 
     def text(extra=()):
         msgs = [*messages, *extra]
-        return delta_text(msgs) if resume else serialize(msgs)
+        return delta_text(msgs) if (resume or fork) else serialize(msgs)
 
     where = contextlib.nullcontext(session.dir) if session is not None else tempfile.TemporaryDirectory()
     with where as d:
@@ -50,7 +51,7 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
         # Grep, WebSearch and FetchUrl run on the host, outside the harness and the task container.
         argv = [droid_bin(), "exec", "-m", model_id, "-o", "json", "--disable-builtin-skills",
                 "--only-tools", "TodoWrite", "-f", str(prompt)] + (["-r", effort] if effort else []) + \
-               (["-s", session.id] if resume else [])
+               (["-s", session.id] if resume else []) + (["--fork", session.fork_from["id"]] if fork else [])
 
         def retry():
             prompt.write_text(text([{"role": "user", "content": RETRY_NOTE}]))
