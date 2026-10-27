@@ -73,6 +73,9 @@ class HarnessConfig:
     # pass them once they are ready.
     acceptance_model: str = ""
     acceptance_step_limit: int = 15
+    # Best-of-N: a final step's first attempt runs as parallel candidates, one per model listed (each in its own
+    # copy of the work folder); the best is kept. [] = off. File-based tasks only.
+    best_of_models: list = field(default_factory=list)
     # Ablation switches for prompt features (all on by default)
     team_roster: bool = True       # TEAM roster lines in each worker's first prompt
     recency_reminder: bool = True  # step + one-command rule restated at the end of every call
@@ -121,7 +124,9 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
     # Harbor --ak values may arrive as strings.
     for name, f in known.items():
         value = getattr(cfg, name)
-        if f.type in (bool, "bool") and isinstance(value, str):
+        if f.type in (list, "list") and isinstance(value, str):  # --ak best_of_models=a,b
+            setattr(cfg, name, [v.strip() for v in value.split(",") if v.strip()])
+        elif f.type in (bool, "bool") and isinstance(value, str):
             setattr(cfg, name, value.strip().lower() in ("1", "true", "yes", "on"))
         elif f.type in (int, float, "int", "float") and isinstance(value, str):
             setattr(cfg, name, (int if f.type in (int, "int") else float)(value))

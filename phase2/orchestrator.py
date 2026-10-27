@@ -18,6 +18,17 @@ from .cli_models import backend_of
 from .verifier import Verdict, read_outputs, steps_dir, verify
 
 
+DISCOVER_TESTS = r"""cd "$(pwd)" 2>/dev/null
+[ -f package.json ] && grep -q '"test"' package.json && echo "npm test   (package.json)"
+for f in pytest.ini tox.ini conftest.py; do [ -f "$f" ] && echo "python -m pytest   ($f)" && break; done
+[ -f pyproject.toml ] && grep -q 'pytest' pyproject.toml && echo "python -m pytest   (pyproject.toml)"
+[ -f Makefile ] && grep -qE '^(test|check):' Makefile && echo "make test   (Makefile)"
+[ -f CMakeLists.txt ] && echo "build, then ctest --output-on-failure   (CMakeLists.txt)"
+[ -f Cargo.toml ] && echo "cargo test   (Cargo.toml)"
+[ -f go.mod ] && echo "go test ./...   (go.mod)"
+find . -maxdepth 3 \( -name node_modules -o -name .git -o -name .venv \) -prune -o -type d \( -name tests -o -name test \) -print 2>/dev/null | head -3 | sed 's/^/tests folder: /'
+find . -maxdepth 3 \( -name node_modules -o -name .git -o -name .venv \) -prune -o -type f \( -name 'test_*.py' -o -name '*_test.*' -o -name '*.test.*' \) -print 2>/dev/null | head -5 | sed 's/^/test file: /'
+true"""
 ACC_DIR = "/tmp/steps/acc"
 # A final step's check also runs the independent acceptance tests, once they exist ("ready").
 ACC_RUN = f"{{ [ ! -f {ACC_DIR}/ready ] || bash {ACC_DIR}/test.sh; }}"
@@ -28,7 +39,10 @@ ACC_GOAL = f"""Write ACCEPTANCE TESTS for the task above; do NOT implement the t
    non-root user in a fresh shell) in {ACC_DIR}/requirements.md.
 2. Write {ACC_DIR}/test.sh: a bash script that checks each stated requirement against the finished system,
    prints PASS or FAIL with a reason for each, and exits 0 only if all pass. Use only tools already in the
-   container. Test only what the task states; do not invent requirements.
+   container. Test only what the task states; do not invent requirements. Use APP="${{APP:-{{workdir}}}}" for
+   every path in the task's work folder, so the script can also be pointed at a copy.
+   The harness runs your script on an untouched copy of the starting files ({ACC_DIR}/orig, with APP set to
+   it): it MUST FAIL there, or it cannot tell finished work from unfinished work. Make it strict enough.
 3. The implementation may not exist yet, so the tests may fail now: that is expected. Make sure the script
    runs (bash -n {ACC_DIR}/test.sh) and fails clearly rather than crashing.
 Then submit."""
@@ -36,6 +50,7 @@ ACC_HINT = (f"\nAn independent agent (acc) is writing acceptance tests from the 
             f"Once {ACC_DIR}/ready exists, run `bash {ACC_DIR}/test.sh` and fix your work until it passes before you "
             f"submit; do not edit {ACC_DIR}/.")
 
+SNAPSHOT_MB = 500
 REPAIR_STEP_LIMIT = 4  # model calls for the missing-outputs repair turn: write the file, submit
 # Failures of the provider, not of the model's ability: code handles them (no handler call) and they
 # are not counted as routing errors (Claude Code keeps provider fallback apart from escalation).
@@ -78,16 +93,21 @@ class Orchestrator:
         self.cfg, self.ledger, self.trace, self.router = cfg, ledger, trace, router
         self.ask_planner, self.work, self.ask_fixer = ask_planner, work, ask_fixer
         self.interventions = 0
-        self.env_block = ""
+        self.env_block, self.workdir, self.snapshot = "", "/app", ""
         self.steps, self.records = {}, {}
         self.logs_dir = logs_dir
         self.on_progress = lambda: None  # agent.py refreshes the Harbor context here
 
     async def run(self, instruction: str, environment) -> dict:
         env_summary = await self._env_summary(environment)
+        self.workdir = (env_summary.splitlines() or ["/app"])[0].strip() or "/app"
+        tests_found = await self._discover_tests(environment)
+        env_summary += tests_found
+        if tests_found:
+            self.trace.log("tests_found", text=tests_found.strip()[:1000])
         # Droid: show the starting state as command output so workers do not re-run the same listing.
-        self.env_block = (f"\n\nAlready run at the start (do not repeat): pwd && ls -la\n{env_summary[:1500]}"
-                          if self.cfg.env_bootstrap else "")
+        self.env_block = (f"\n\nAlready run at the start (do not repeat): pwd && ls -la\n{env_summary[:2500]}"
+                          if self.cfg.env_bootstrap else tests_found)
         if self.cfg.plan_from:  # same DAG as an earlier run: only the routing policy differs
             plan = load_pinned_plan(self.cfg.plan_from, self.cfg.max_plan_steps)
             plan_info = {"attempts": 0, "fallback": False, "errors": [], "pinned_from": str(self.cfg.plan_from)}
@@ -116,8 +136,10 @@ class Orchestrator:
             # 2026-10-27 analysis: in 15 of 20 failed runs the step's own check passed but the task's tests
             # failed. An agent that never sees the implementation writes tests from the task text; the final
             # steps must pass them (Droid: validators independent of, and from another family than, the builder).
-            acc = Step(id="acc", goal=ACC_GOAL, writes=[f"{ACC_DIR}/**"],
-                       check=f"test -s {ACC_DIR}/test.sh && bash -n {ACC_DIR}/test.sh")
+            acc = Step(id="acc", goal=ACC_GOAL.replace("{workdir}", self.workdir), writes=[f"{ACC_DIR}/**"],
+                       check=(f"test -s {ACC_DIR}/test.sh && bash -n {ACC_DIR}/test.sh && "
+                              f"{{ [ ! -d {ACC_DIR}/orig ] || ! APP={ACC_DIR}/orig/{Path(self.workdir).name} "
+                              f"timeout 300 bash {ACC_DIR}/test.sh >/dev/null 2>&1; }}"))
             acc.worker_step_limit = self.cfg.acceptance_step_limit
             for s in self._sinks(plan.steps):
                 s.check = f"( {s.check} ) && {ACC_RUN}" if s.check.strip() else ACC_RUN
@@ -134,6 +156,7 @@ class Orchestrator:
         async def run_step(step):
             return await self._run_step(step, instruction, environment, bb)
 
+        self.snapshot = await self._snapshot(environment) if (acc or self.cfg.best_of_models) else ""
         acc_task = asyncio.create_task(self._run_acceptance(acc, instruction, environment, bb)) if acc else None
         results = await run_dag(plan.steps, run_step, self.cfg.max_parallel)
         if acc_task and await acc_task:
@@ -152,6 +175,68 @@ class Orchestrator:
         self.trace.log("done", **{k: summary[k] for k in ("n_escalations", "n_failed_steps", "n_interventions",
                                                           "policy")})
         return summary
+
+    async def _best_of(self, step, record, environment, bb) -> None:
+        """Several candidates attempt a final step at once, each in its own copy of the work folder and on its
+        own model (diversity is the point); the one that passes most of the acceptance tests (or its check)
+        is copied back into the work folder. Valid for file-based work; a task whose state lives in running
+        services should keep best_of_models empty."""
+        import shlex
+
+        wd, models = self.workdir, list(self.cfg.best_of_models)
+        cands = []
+        for k, model in enumerate(models):
+            copy = f"/tmp/cand/{k}/{Path(wd).name}"
+            await environment.exec(f"rm -rf /tmp/cand/{k} && mkdir -p /tmp/cand/{k} && cp -a {self.snapshot} {copy}",
+                                   timeout_sec=300)
+            goal = (f"You are candidate {k + 1} of {len(models)} for this step. Work ONLY in {copy}, your private copy "
+                    f"of {wd}: every path under {wd} in the task means the same path under {copy}. Never touch {wd}. "
+                    f"Run acceptance tests with APP={copy} bash {ACC_DIR}/test.sh once {ACC_DIR}/ready exists.\n\n"
+                    + step.goal.replace(wd, copy))
+            cand = step.model_copy(update={"id": f"{step.id}c{k}", "goal": goal, "check": step.check.replace(wd, copy),
+                                           "writes": [w.replace(wd, copy) for w in step.writes]})
+            cands.append((k, model, copy, cand))
+            await environment.exec(f"mkdir -p {steps_dir(cand.id)}", timeout_sec=30)
+        team = bb.summary_for(step.id, step.depends_on, roster=self.cfg.team_roster)
+        out = (lambda k: (self.logs_dir / f"worker_{step.id}_cand{k}.json") if self.logs_dir else None)
+        results = await asyncio.gather(*[asyncio.to_thread(self.work, c, m, team + self.env_block, out(k))
+                                         for k, m, _, c in cands])
+        scores = []
+        for (k, model, copy, cand), res in zip(cands, results):
+            r = await environment.exec(f"cd {ACC_DIR} 2>/dev/null; [ -f {ACC_DIR}/ready ] && APP={shlex.quote(copy)} "
+                                       f"timeout 300 bash {ACC_DIR}/test.sh 2>&1 | grep -c PASS; true", timeout_sec=330)
+            passes = int((r.stdout or "0").strip().splitlines()[-1] or 0) if (r.stdout or "").strip() else 0
+            v = await verify(environment, cand, res.exit_status, self.cfg.check_timeout)
+            scores.append((v.passed, passes, -res.n_calls, k, model, copy, cand, res))
+            self.trace.log("candidate", step=step.id, k=k, model=model, check_passed=v.passed, acceptance_passes=passes,
+                           n_calls=res.n_calls, exit_status=res.exit_status)
+        best = max(scores, key=lambda s: s[:3])
+        _, _, _, k, model, copy, cand, res = best
+        await environment.exec(f"cp -a {copy}/. {wd}/ && cp -f {steps_dir(cand.id)}/outputs.txt {steps_dir(step.id)}/ "
+                               f"2>/dev/null; true", timeout_sec=300)
+        verdict = await verify(environment, step, res.exit_status, self.cfg.check_timeout)
+        self.trace.log("best_of", step=step.id, winner=k, model=model, passed=verdict.passed,
+                       check_output=verdict.output[-300:])
+        record["attempts"].append({"tier": record["tier"], "model": model, "exit_status": res.exit_status,
+                                   "passed": verdict.passed, "n_calls": sum(r.n_calls for r in results),
+                                   "best_of": len(cands)})
+        outputs, _ = await read_outputs(environment, step)
+        bb.update(step.id, summary=res.summary, outputs=outputs, check_output=verdict.output[-500:])
+        record["passed"] = verdict.passed
+
+    async def _snapshot(self, environment) -> str:
+        """An untouched copy of the work folder before any agent starts (for validating acceptance tests and
+        for best-of-N candidates). Skipped when the folder is over SNAPSHOT_MB."""
+        d, dest = self.workdir, f"{ACC_DIR}/orig"
+        cmd = (f"mkdir -p {dest} && s=$(du -sm {d} 2>/dev/null | cut -f1) && [ \"$s\" -lt {SNAPSHOT_MB} ] && "
+               f"cp -a {d} {dest}/ && echo ok")
+        try:
+            r = await environment.exec(cmd, timeout_sec=300)
+            ok = "ok" in (r.stdout or "")
+        except Exception:
+            ok = False
+        self.trace.log("snapshot", ok=ok, path=f"{dest}/{Path(d).name}" if ok else "")
+        return f"{dest}/{Path(d).name}" if ok else ""
 
     @staticmethod
     def _sinks(steps):
@@ -201,6 +286,16 @@ class Orchestrator:
             record["passed"] = verdict.passed
             bb.update(s.id, status="done" if verdict.passed else "failed")
 
+    async def _discover_tests(self, environment) -> str:
+        """The task's own test commands, found once at the start: hidden tests usually look like them."""
+        try:
+            r = await environment.exec(DISCOVER_TESTS, timeout_sec=30)
+            found = [l.strip() for l in (r.stdout or "").splitlines() if l.strip()][:8]
+        except Exception:
+            found = []
+        return ("\n\nTests that already exist in the task (run the relevant ones before you submit; the task's "
+                "own grading tests probably look like these):\n" + "\n".join(f"- {f}" for f in found)) if found else ""
+
     async def _env_summary(self, environment) -> str:
         try:
             r = await environment.exec("pwd && ls -la | head -50", timeout_sec=30)
@@ -223,6 +318,13 @@ class Orchestrator:
         except Exception:
             pass  # the worker can still create it; read_outputs copes with a missing file
         handoff = ""
+        if (self.cfg.best_of_models and self.snapshot and step.id in {s.id for s in self._sinks(self.steps.values())}
+                and not self.over_budget(self.cfg.top_tier_budget_frac)):
+            await self._best_of(step, record, environment, bb)
+            if record["passed"]:
+                bb.update(step.id, status="done")
+                self.trace.log("step_end", step=step.id, passed=True, attempts=len(record["attempts"]))
+                return record
         while True:
             result, verdict, out_path = await self._attempt(step, record, handoff, environment, bb)
             if verdict.passed:

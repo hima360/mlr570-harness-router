@@ -796,3 +796,56 @@ def test_acceptance_tests_run_beside_the_work_and_reopen_a_final_step_once(tmp_p
     assert summary["plan"][0]["check"].startswith("( true ) && { [ ! -f /tmp/steps/acc/ready ]")
     assert [e["event"] for e in trace.events].count("reopen") == 1 and summary["steps"]["s1"]["passed"]
     assert next(e for e in trace.events if e["event"] == "acceptance")["ready"] is True
+
+
+def test_task_tests_are_discovered_and_shown_to_planner_and_workers(tmp_path):
+    cfg = load_config(policy="fixed:0")
+    prompts, texts = [], []
+
+    def handler(cmd):
+        if cmd.startswith("pwd"):
+            return "/app\ntotal 1", 0
+        if "package.json" in cmd and "pytest" in cmd:
+            return "python -m pytest   (pytest.ini)\ntests folder: ./tests", 0
+        return "", 0
+
+    def ask(messages):
+        prompts.append(messages[0]["content"])
+        return plan_json(("s1", [], [], "true"), ("s2", [], [], "true"))
+
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), Trace(None), Router(cfg, laya=None, arch=None), ask,
+                        lambda step, model, text, out: texts.append(text) or WorkerResult("Submitted", "", 1), tmp_path)
+    asyncio.run(orch.run("task", FakeEnvironment(handler)))
+    assert "python -m pytest   (pytest.ini)" in prompts[0] and all("tests folder: ./tests" in t for t in texts)
+
+
+def test_best_of_runs_candidates_in_copies_and_keeps_the_best(tmp_path):
+    cfg = load_config(policy="fixed:0", acceptance_model="anthropic/claude-opus-5-5",
+                      best_of_models="m1/a,m2/b")
+    assert cfg.best_of_models == ["m1/a", "m2/b"]
+    cfg.prices_per_million.update({"m1/a": cfg.prices_per_million[cfg.tiers[0]], "m2/b": cfg.prices_per_million[cfg.tiers[0]]})
+    seen, cmds, trace = [], [], Trace(None)
+
+    def work(step, model, text, out):
+        seen.append((step.id, model, "/tmp/cand/" in step.goal))
+        return WorkerResult("Submitted", "", 2)
+
+    def handler(cmd):
+        cmds.append(cmd)
+        if cmd.startswith("pwd"):
+            return "/app\n", 0
+        if "du -sm" in cmd:
+            return "ok", 0
+        if "grep -c PASS" in cmd:
+            return ("3" if "/tmp/cand/1/" in cmd else "1"), 0
+        return "", 0
+
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "true")), work, tmp_path)
+    summary = asyncio.run(orch.run("task", FakeEnvironment(handler)))
+    best = next(e for e in trace.events if e["event"] == "best_of")
+    assert best["winner"] == 1 and best["model"] == "m2/b" and summary["steps"]["s1"]["passed"]
+    assert {("s1c0", "m1/a", True), ("s1c1", "m2/b", True)} <= set(seen)
+    assert any(c.startswith("cp -a /tmp/cand/1/app/. /app/") for c in cmds)
+    acc_check = next(e for e in trace.events if e["event"] == "acceptance")
+    assert acc_check is not None
