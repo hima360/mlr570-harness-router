@@ -36,6 +36,6 @@
   },
   "prices_source": "Billed in Factory Standard Credits through droid exec (Hima's Factory subscription), not the Claude subscription. Same three Claude 5.5 models as phase2-claude-ladder.json. No USD rate per credit is published, so cost_usd stays 0 and credits are reported.",
   "merge_chains": true,
-  "max_run_credits": 300000,
+  "max_run_credits": 500000,
   "reviewer_model": "droid/gpt-6-luna"
 }
