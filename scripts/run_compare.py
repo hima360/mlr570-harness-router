@@ -26,11 +26,15 @@ ROUTED = {"max_plan_steps": "5", "worker_step_limit": "40", "step_wall_time_sec"
 # --long: Terminal-Bench allows hours per task; give the agents room to verify (2026-10-27: agents submitted
 # early, sure they were done)
 LONG = {"worker_step_limit": "80", "step_wall_time_sec": "3600", "submit_checks": "3"}
-SETUPS = {
+SETUPS = {  # name: (policy, caps[, config overriding --config])
     "haiku": ("fixed:0", BASE),
     "sonnet": ("fixed:1", BASE),
+    "opus": ("fixed:2", BASE),
     "routed": ("laya", ROUTED),
     "split": ("laya", {**ROUTED, "merge_chains": "false"}),
+    "planner": ("planner", ROUTED),
+    "levers": ("planner", {**ROUTED, **{"worker_step_limit": "80", "step_wall_time_sec": "3600", "submit_checks": "3"}},
+               "configs/phase2-droid-levers.json"),
 }
 
 
@@ -39,8 +43,9 @@ def run(config: str, prefix: str, parallel: int, tasks: list[str], setups=None, 
 
     chosen = setups or list(SETUPS)
     queue = [(f"{prefix}-{s}-{t}" + (f"-r{r}" if repeats > 1 else ""), t, SETUPS[s][0],
-              {**SETUPS[s][1], **(LONG if long and SETUPS[s][1] is not BASE else {})})
-             for t in tasks for s in chosen for r in range(1, repeats + 1)]
+              {**SETUPS[s][1], **(LONG if long and SETUPS[s][1] is not BASE else {})},
+              SETUPS[s][2] if len(SETUPS[s]) > 2 else config)
+             for r in range(1, repeats + 1) for t in tasks for s in chosen]
     log = open(ROOT / "jobs" / f"{prefix}.queue.log", "a", buffering=1)
     running = {}
     while queue or running:
@@ -53,11 +58,11 @@ def run(config: str, prefix: str, parallel: int, tasks: list[str], setups=None, 
                 log.write(f"{time.strftime('%H:%M:%S')} done {name}\n")
                 del running[name]
         while queue and len(running) < parallel:
-            name, task, policy, caps = queue.pop(0)
+            name, task, policy, caps, cfg_path = queue.pop(0)
             if (ROOT / "jobs" / name).exists():
                 log.write(f"skip {name} (exists)\n")
                 continue
-            running[name] = J.start_run(ROOT, f"terminal-bench/{task}", config, policy, caps, name)
+            running[name] = J.start_run(ROOT, f"terminal-bench/{task}", cfg_path, policy, caps, name)
             log.write(f"{time.strftime('%H:%M:%S')} start {name} pid={running[name]}\n")
         time.sleep(20)
     log.write("ALL DONE\n")
