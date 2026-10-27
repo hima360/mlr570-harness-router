@@ -44,6 +44,10 @@ A check must fail for a plausible WRONG answer, not only a malformed one: recomp
 value against the source data (for example regenerate the observed domains from the seed, or decrypt a
 known sample with the key). A format-only check lets a wrong value flow into every later step.
 If the steps would only form a chain with no parallel work, prefer fewer, larger steps (2 or 3).
+A check runs in the task container with only what is installed there: use shell tools, the Python
+standard library, or the same interpreter and packages the task itself uses (for example its virtualenv);
+never import a package the task does not already provide (2026-10-27: a check that imported pandas with the
+system python3 failed although the step's work was right).
 
 Keep each step small enough for a modest model to finish in about 10 shell commands; split long
 investigations into separate steps. Steps that write overlapping files must depend on each other.
