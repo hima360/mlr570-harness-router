@@ -1,7 +1,7 @@
 """Planner: one frontier-model call turns the task into a validated DAG of steps."""
 import json
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -83,6 +83,7 @@ class Step(BaseModel):
     worker_step_limit: int | None = Field(default=None, exclude=True)
     wall_time_sec: int | None = Field(default=None, exclude=True)
     fork_from: dict | None = Field(default=None, exclude=True)  # the continued step's session (set by the harness)
+    team_feed: Any = Field(default=None, exclude=True)  # () -> "TEAM UPDATE: ..." since the last call
 
 
 class Plan(BaseModel):

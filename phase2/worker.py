@@ -216,7 +216,7 @@ your_command_here
 
 
 def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None, reminder: str = "",
-                step_limit: int = 0, fork_from: dict | None = None):
+                step_limit: int = 0, fork_from: dict | None = None, team_feed=None):
     import time
 
     from minisweagent.models.litellm_model import LitellmModel
@@ -238,7 +238,7 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
         return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
                                context_budget_chars=cfg.context_budget_chars, reminder=reminder,
                                step_limit=step_limit, session_budget_chars=cfg.session_budget_chars,
-                               fork_from=fork_from)
+                               fork_from=fork_from, team_feed=team_feed)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):
@@ -276,7 +276,7 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
                 f"one command block. Publish results in {steps_dir(step.id)}/outputs.txt; submit when done.")
     model = model or _make_model(cfg, ledger, model_id, on_call, effort="low" if step.effort == "low" else None,
                                  reminder=reminder, step_limit=step.worker_step_limit or cfg.worker_step_limit,
-                                 fork_from=step.fork_from)
+                                 fork_from=step.fork_from, team_feed=step.team_feed)
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""

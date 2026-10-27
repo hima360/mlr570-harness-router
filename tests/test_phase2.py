@@ -717,3 +717,37 @@ def test_continues_must_name_a_dependency_and_continued_chains_are_not_merged(tm
     assert [s for s, _ in seen] == ["s1", "s2"]  # not merged
     # zai/ models have no CLI session backend, so no fork is attempted
     assert seen[1][1] is None and not any(e["event"] == "fork" for e in trace.events)
+
+
+def test_every_worker_sees_the_team_roles_and_gets_live_updates():
+    from phase2.blackboard import Blackboard
+
+    bb = Blackboard(task="t")
+    bb.add("s1", "build the parser", ["src/parser.py"], ["grammar"], [])
+    bb.add("s2", "build the CLI", ["src/cli.py"], [], [])
+    bb.add("s3", "integrate", ["src/main.py"], ["report"], ["s1", "s2"])
+    text = bb.summary_for("s1", [])
+    assert "TEAM: 3 agents share this task" in text and "YOU are s1." in text and "Waiting on you: s3" in text
+    assert "owns: src/cli.py" in text and "builds on: s1, s2" in text and "blocker=" in text
+    feed = bb.feed_for("s3", ["s1", "s2"])
+    assert feed() == ""
+    bb.update("s2", status="done")
+    bb.update("s1", outputs={"grammar": "LL(1)"})
+    bb.update("s1", status="done")
+    upd = feed()
+    assert upd.startswith("TEAM UPDATE: ") and "s1 published grammar=LL(1)" in upd and "s2 finished (your step needs it)" in upd
+    assert feed() == ""  # each event is shown once
+
+
+def test_live_team_update_reaches_the_model_call():
+    from phase2 import cli_models
+
+    seen, pending = [], ["TEAM UPDATE: s1 finished"]
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, reminder="R",
+                                       team_feed=lambda: pending.pop() if pending else "",
+                                       complete_fn=lambda m, msgs: seen.append(msgs[-1]["content"]) or
+                                       ("x", {"prompt_tokens": 1, "completion_tokens": 1}))
+    model._query([{"role": "user", "content": "go"}])
+    model._query([{"role": "user", "content": "go"}])
+    assert "TEAM UPDATE: s1 finished" in seen[0] and seen[0].index("TEAM UPDATE") < seen[0].index("[Reminder]")
+    assert "TEAM UPDATE" not in seen[1]

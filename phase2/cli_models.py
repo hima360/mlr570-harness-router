@@ -260,17 +260,19 @@ def guard_reply(text: str) -> tuple[str, str]:
     return text, "+".join(reasons)
 
 
-def remind(messages: list[dict], reminder: str) -> list[dict]:
-    """Droid's recency trick: restate the rules at the newest end of the context on every call."""
-    if not reminder or not messages or messages[-1].get("role") != "user":
+def remind(messages: list[dict], reminder: str, update: str = "") -> list[dict]:
+    """Droid's recency trick: restate the rules at the newest end of the context on every call, after any
+    live team update."""
+    if not (reminder or update) or not messages or messages[-1].get("role") != "user":
         return messages
     last = messages[-1]
-    return [*messages[:-1], {**last, "content": f"{last.get('content') or ''}\n\n[Reminder] {reminder}"}]
+    tail = (f"\n\n{update}" if update else "") + (f"\n\n[Reminder] {reminder}" if reminder else "")
+    return [*messages[:-1], {**last, "content": f"{last.get('content') or ''}{tail}"}]
 
 
 def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
                     reminder: str = "", step_limit: int = 0, session_budget_chars: int = 0,
-                    fork_from: dict | None = None):
+                    fork_from: dict | None = None, team_feed=None):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -282,7 +284,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
     calls = [0]
     session = CliSession(fork_from) if session_budget_chars else None
 
-    def session_call(messages, note):
+    def session_call(messages, note, update=""):
         """Send only the turns the CLI session has not seen; once the session outgrows its budget, start a
         new one from the compacted view (stable compaction: the fold happens rarely, so the cached prefix
         survives between folds instead of changing on every call)."""
@@ -304,7 +306,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
                 session.reset()
             payload, kind = compact_messages(messages, context_budget_chars), "new"
         try:
-            text, usage = complete_fn(model, remind(payload, note), session=session)
+            text, usage = complete_fn(model, remind(payload, note, update), session=session)
         except (StepIdle, ModelTimedOut):
             raise
         except Exception:
@@ -313,7 +315,7 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
             # a lost session or a failed fork: start again from the compacted view
             session.reset()  # a lost or broken session: start again from the compacted view
             payload, kind = compact_messages(messages, context_budget_chars), "new"
-            text, usage = complete_fn(model, remind(payload, note), session=session)
+            text, usage = complete_fn(model, remind(payload, note, update), session=session)
         session.seen = len(messages)
         session.chars = (session.chars if kind in ("resume", "fork") else 0) + size(payload) + len(text)
         return text, {**usage, "session": kind}
@@ -332,8 +334,11 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
             if left <= 5:  # oh-my-pi's soft budget: warn before the hard limit ends the attempt
                 note += (f" About {max(left, 0)} actions left: if you will not finish, publish what you found "
                          "and a blocker, then submit.")
-            text, usage = session_call(messages, note) if session else \
-                complete_fn(model, remind(compact_messages(messages, context_budget_chars), note))
+            update = team_feed() if team_feed else ""
+            text, usage = session_call(messages, note, update) if session else \
+                complete_fn(model, remind(compact_messages(messages, context_budget_chars), note, update))
+            if update:
+                usage = {**usage, "team_update": update[:200]}
             guard.progress()
             if usage.get("truncated"):  # pi-mono runs none of a reply cut at the output limit
                 text = text.split("```mswea_bash_command")[0] + "\n(reply cut at the output limit; nothing was run)"

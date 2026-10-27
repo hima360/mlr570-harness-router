@@ -95,7 +95,7 @@ class Orchestrator:
         self.steps = {s.id: s for s in plan.steps}
         bb = Blackboard(task=instruction)
         for s in plan.steps:
-            bb.add(s.id, s.goal)
+            bb.add(s.id, s.goal, s.writes, [o.name for o in s.outputs], s.depends_on)
 
         async def run_step(step):
             return await self._run_step(step, instruction, environment, bb)
@@ -200,6 +200,7 @@ class Orchestrator:
         if parent and parent.get("backend") and parent["backend"] == backend_of(model_id):
             step = step.model_copy(update={"fork_from": parent})
             self.trace.log("fork", step=step.id, parent=step.continues, model=model_id)
+        step = step.model_copy(update={"team_feed": bb.feed_for(step.id, step.depends_on)})
         result = await asyncio.to_thread(self.work, step, model_id, team + self.env_block + handoff, out_path)
         outputs, missing = await read_outputs(environment, step)
         if missing and result.exit_status in ("Submitted", "LimitsExceeded"):
