@@ -224,12 +224,9 @@ class Orchestrator:
     def over_budget(self, frac: float = 1.0) -> str:
         """Why spending must stop ("" = within budget): the run's list-price USD or Factory credits have
         reached `frac` of their cap."""
-        t = self.ledger.totals()
-        if self.cfg.max_run_cost_usd and t.cost_usd >= frac * self.cfg.max_run_cost_usd:
-            return f"spent ${t.cost_usd:.2f} of ${self.cfg.max_run_cost_usd:.2f}"
-        if self.cfg.max_run_credits and t.factory_credits >= frac * self.cfg.max_run_credits:
-            return f"spent {t.factory_credits:,.0f} of {self.cfg.max_run_credits:,.0f} credits"
-        return ""
+        from .ledger import budget_exceeded
+
+        return budget_exceeded(self.cfg, self.ledger, frac)
 
     def _ancestors(self, step_id: str) -> list[str]:
         seen, todo = [], list(self.steps[step_id].depends_on) if step_id in self.steps else []

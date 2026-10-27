@@ -710,3 +710,49 @@ def test_continued_step_forks_the_parent_session_on_the_same_backend():
     ds = CliSession({"id": "DPARENT", "backend": "droid", "dir": "/tmp", "chars": 10})
     droid.complete("droid/claude-haiku-5-5", [{"role": "user", "content": "x"}], run=drun, session=ds)
     assert dcalls[0][dcalls[0].index("--fork") + 1] == "DPARENT" and "-s" not in dcalls[0]
+
+
+def test_install_commands_take_turns_and_others_do_not_wait():
+    from phase2.worker import INSTALL_LOCK, bounded
+
+    assert INSTALL_LOCK in bounded("pip install numpy", 60) and "flock 9" in bounded("apt-get install -y jq", 60)
+    assert INSTALL_LOCK not in bounded("python3 train.py --install-dir x", 60) and INSTALL_LOCK not in bounded("ls", 60)
+
+
+def test_budget_stops_a_running_attempt_before_its_next_call():
+    from phase2 import cli_models
+
+    spent = {"over": ""}
+    calls = []
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, budget_fn=lambda: spent["over"],
+                                       complete_fn=lambda m, msgs: calls.append(1) or
+                                       ("x", {"prompt_tokens": 1, "completion_tokens": 1}))
+    model._query([{"role": "user", "content": "go"}])
+    spent["over"] = "spent 300,001 of 300,000 credits"
+    with pytest.raises(cli_models.BudgetExceeded, match="300,000"):
+        model._query([{"role": "user", "content": "go"}])
+    assert len(calls) == 1 and cli_models.BudgetExceeded in type(model).abort_exceptions
+
+
+def test_reviewer_sends_back_values_without_evidence(monkeypatch):
+    from phase2 import llm, worker
+    from phase2.planner import Output, Step
+
+    env = FakeEnvironment(lambda cmd: ("seed=0c6c49e8\n", 0) if "outputs.txt" in cmd else ("", 0))
+    cfg = load_config(reviewer_model="anthropic/claude-opus-5-5")
+    prompts = []
+    monkeypatch.setattr(llm, "chat", lambda cfg, led, model, msgs, on_call=None:
+                        prompts.append(msgs[0]["content"]) or
+                        '{"unsupported": [{"name": "seed", "why": "never printed; first label used"}]}')
+    step = Step(id="s2", goal="recover the seed", outputs=[Output(name="seed")])
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "t"},
+                {"role": "assistant", "content": "THOUGHT: guess\n```mswea_bash_command\nhead log\n```"},
+                {"role": "user", "content": "<output>0c6c49e8.cc</output>"}]
+        return await asyncio.to_thread(worker.review_values, cfg, Ledger({}), step, adapter, msgs)
+
+    problem = asyncio.run(main())
+    assert "no evidence" in problem and "seed (never printed" in problem
+    assert "seed=0c6c49e8" in prompts[0] and "head log" in prompts[0]

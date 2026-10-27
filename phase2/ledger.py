@@ -104,3 +104,14 @@ class Ledger:
             extra["claude_code_cost_usd"] = reported
         if extra:
             context.metadata = {**(context.metadata or {}), **extra}
+
+
+def budget_exceeded(cfg, ledger, frac: float = 1.0) -> str:
+    """Why spending must stop ("" = within budget): the run's list-price USD or Factory credits have
+    reached `frac` of their cap (config max_run_cost_usd / max_run_credits; 0 = no cap)."""
+    t = ledger.totals()
+    if cfg.max_run_cost_usd and t.cost_usd >= frac * cfg.max_run_cost_usd:
+        return f"spent ${t.cost_usd:.2f} of ${cfg.max_run_cost_usd:.2f}"
+    if cfg.max_run_credits and t.factory_credits >= frac * cfg.max_run_credits:
+        return f"spent {t.factory_credits:,.0f} of {cfg.max_run_credits:,.0f} credits"
+    return ""

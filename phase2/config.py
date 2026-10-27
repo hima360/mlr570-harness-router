@@ -66,6 +66,9 @@ class HarnessConfig:
     max_run_cost_usd: float = 0.0
     max_run_credits: float = 0.0
     top_tier_budget_frac: float = 0.5
+    # A cheap model from another family that checks published facts against the transcript on submit
+    # ("" = off). Its sends-back share the submit gate's submit_checks.
+    reviewer_model: str = ""
     # CLI workers: once a conversation outgrows this, older turns are folded into PROGRESS SO FAR.
     # 0 = off. ~32k chars is ~11-13k tokens with CLI overhead (measured 2.7-3.3 chars/token).
     context_budget_chars: int = 32000
@@ -115,7 +118,7 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
             setattr(cfg, name, (int if f.type in (int, "int") else float)(value))
     from .droid import is_droid
 
-    missing = [m for m in cfg.tiers + [cfg.planner_model] + ([cfg.fixer_model] if cfg.fixer_model else [])
+    missing = [m for m in cfg.tiers + [cfg.planner_model] + [x for x in (cfg.fixer_model, cfg.reviewer_model) if x]
                if not is_droid(m) and m not in cfg.prices_per_million]
     if missing:
         raise ValueError(f"no price for models: {missing}")

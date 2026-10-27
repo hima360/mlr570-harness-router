@@ -5,6 +5,7 @@ each shell command is sent back to the event loop with run_coroutine_threadsafe.
 """
 import asyncio
 import os
+import re
 from dataclasses import dataclass
 
 os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")
@@ -66,8 +67,9 @@ class SubmitGate:
     attempt ending and a fresh, pricier attempt starting. The check command itself is not shown.
     At most `max_blocks` per attempt; each one costs a step of the worker's step limit."""
 
-    def __init__(self, inner, step, check_timeout: int, max_blocks: int = 2):
+    def __init__(self, inner, step, check_timeout: int, max_blocks: int = 2, reviewer=None):
         self.inner, self.step, self.check_timeout, self.max_blocks = inner, step, check_timeout, max_blocks
+        self.reviewer = reviewer  # (step, outputs) -> problem text or "": checks values against evidence
         self.blocks = 0
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
@@ -79,6 +81,8 @@ class SubmitGate:
             if self.blocks >= self.max_blocks or not hasattr(self.inner, "gate"):
                 raise
             problem = self.inner.gate(self.step, self.check_timeout)
+            if not problem and self.reviewer:
+                problem = self.reviewer(self.step)
             if not problem:
                 raise
             self.blocks += 1
@@ -124,11 +128,19 @@ NONINTERACTIVE_ENV = {"PAGER": "cat", "GIT_PAGER": "cat", "MANPAGER": "cat", "ED
                       "PIP_PROGRESS_BAR": "off", "DEBIAN_FRONTEND": "noninteractive"}
 
 
+INSTALL = re.compile(r"\b(apt-get|apt|dpkg|pip3?|python3? -m pip|uv pip|npm|yarn|pnpm|conda|cargo)\b[^\n|;&]*"
+                     r"\b(install|add|i)\b")
+INSTALL_LOCK = "/tmp/steps/.install.lock"
+
+
 def bounded(command: str, seconds: int) -> str:
     """Run under coreutils `timeout` inside the container, a little before Harbor's own limit: Harbor
     discards all output when its limit fires (docker.py), `timeout` returns 124 with the partial output."""
     import shlex
 
+    if INSTALL.search(command):  # parallel steps share one container: installs take turns (dpkg / pip locks)
+        command = (f"mkdir -p /tmp/steps; exec 9>{INSTALL_LOCK}; command -v flock >/dev/null 2>&1 && flock 9; "
+                   + command)
     inner = f"bash -c {shlex.quote(command)}"
     return (f"if command -v timeout >/dev/null 2>&1; then timeout -k 5 {max(seconds - 10, 5)} {inner}; "
             f"else {inner}; fi")
@@ -217,6 +229,8 @@ your_command_here
 
 def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = None, reminder: str = "",
                 step_limit: int = 0, fork_from: dict | None = None, team_feed=None):
+    from .ledger import budget_exceeded
+
     import time
 
     from minisweagent.models.litellm_model import LitellmModel
@@ -238,7 +252,8 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
         return make_text_model(model_id, on_result, complete_fn=complete, idle_sec=cfg.step_idle_sec,
                                context_budget_chars=cfg.context_budget_chars, reminder=reminder,
                                step_limit=step_limit, session_budget_chars=cfg.session_budget_chars,
-                               fork_from=fork_from, team_feed=team_feed)
+                               fork_from=fork_from, team_feed=team_feed,
+                               budget_fn=(lambda: budget_exceeded(cfg, ledger)) if ledger is not None else None)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):
@@ -280,13 +295,16 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""
+    gate = SubmitGate(env_adapter, step, cfg.check_timeout, cfg.submit_checks)
     agent = DefaultAgent(
-        model, SubmitGate(env_adapter, step, cfg.check_timeout, cfg.submit_checks),
+        model, gate,
         system_template="You are a careful software engineer operating a Linux shell.",
         instance_template=INSTANCE_TEMPLATE,
         step_limit=step.worker_step_limit or cfg.worker_step_limit, cost_limit=0, output_path=output_path,
         wall_time_limit_seconds=step.wall_time_sec or cfg.step_wall_time_sec,
     )
+    if cfg.reviewer_model and model_id != cfg.reviewer_model:
+        gate.reviewer = lambda s: review_values(cfg, ledger, s, env_adapter, agent.messages, on_call)
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,
                          blackboard=blackboard_text, writes_hint=writes_hint,
@@ -381,3 +399,49 @@ def compact_messages(messages: list[dict], budget_chars: int) -> list[dict]:
     progress = ("\n\nPROGRESS SO FAR (your older turns, folded to save space; the files you wrote and "
                 "/tmp/steps/ are unchanged):\n" + "\n".join(reversed(kept)))
     return [head[0], {**head[1], "content": str(head[1].get("content") or "") + progress}, *rest[-keep:]]
+
+
+REVIEW_PROMPT = """You review a coding agent's claimed results. You do not run anything. For each published
+value below, decide whether the command outputs in the transcript SHOW it (it was printed, computed or read
+from the data), or whether it was guessed, assumed, copied from an example, or only has the right format.
+
+Step goal: {goal}
+
+Published values:
+{facts}
+
+Transcript (commands and the start of their outputs, newest last):
+{digest}
+
+Reply with only JSON: {{"unsupported": [{{"name": "<value name>", "why": "<what evidence is missing>"}}]}}
+Use an empty list when every value is supported."""
+
+
+def review_values(cfg, ledger, step, env_adapter, messages, on_call=None) -> str:
+    """Droid's validators come from a different model family than the implementer; oh-my-pi's reviewer
+    "challenges premature done". One cheap call on submit: a published fact with no evidence in the
+    transcript sends the worker back (the 1025 runs passed a wrong seed and a wrong key on format-only
+    checks). Returns the problem text, or "" when supported, when nothing was published, or on any error."""
+    import json
+
+    from .llm import chat
+    from .verifier import read_outputs
+
+    try:
+        outputs, _ = asyncio.run_coroutine_threadsafe(read_outputs(env_adapter.environment, step),
+                                                      env_adapter.loop).result()
+        if not outputs:
+            return ""
+        prompt = REVIEW_PROMPT.format(goal=step.goal[:1500], digest=attempt_digest(messages, 6000),
+                                      facts="\n".join(f"- {k}={v[:300]}" for k, v in outputs.items()))
+        reply = chat(cfg, ledger, cfg.reviewer_model, [{"role": "user", "content": prompt}],
+                     on_call=(lambda info: on_call({**info, "purpose": "review"})) if on_call else None)
+        m = re.search(r"\{.*\}", reply or "", re.S)
+        bad = [b for b in (json.loads(m.group(0)).get("unsupported") or []) if isinstance(b, dict)] if m else []
+    except Exception:
+        return ""
+    if not bad:
+        return ""
+    return ("a reviewer found no evidence in your command outputs for: "
+            + "; ".join(f"{b.get('name')} ({str(b.get('why', ''))[:200]})" for b in bad[:5])
+            + ". Show the evidence (print or recompute it), or correct the value.")

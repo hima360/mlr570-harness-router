@@ -220,6 +220,11 @@ def complete_fn_for(model: str, cfg=None):
     extra = {"max_output_tokens": cfg.max_output_tokens} if fn is claude_code.complete and cfg.max_output_tokens else {}
     return functools.partial(fn, effort=(cfg.reasoning_effort or {}).get(model), timeout=cfg.cli_timeout_sec, **extra)
 
+class BudgetExceeded(Exception):
+    """The run's spend cap was reached during an attempt: the worker stops before its next model call
+    (2026-10-27: an attempt already running took a run to 415k credits against a 300k cap)."""
+
+
 class StepIdle(Exception):
     """No model reply for too long: ends the step attempt (mini-swe-agent does not retry it)."""
 
@@ -272,7 +277,7 @@ def remind(messages: list[dict], reminder: str, update: str = "") -> list[dict]:
 
 def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
                     reminder: str = "", step_limit: int = 0, session_budget_chars: int = 0,
-                    fork_from: dict | None = None, team_feed=None):
+                    fork_from: dict | None = None, team_feed=None, budget_fn=None):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -321,13 +326,16 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
         return text, {**usage, "session": kind}
 
     class CliTextModel(LitellmTextbasedModel):
-        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable, ModelTimedOut]
+        abort_exceptions = [*LitellmModel.abort_exceptions, StepIdle, ProviderUnavailable, ModelTimedOut,
+                            BudgetExceeded]
 
         def _query(self, messages, **kwargs):
             from .worker import compact_messages
 
             guard.check()
             t0 = time.perf_counter()
+            if budget_fn and (why := budget_fn()):
+                raise BudgetExceeded(why)
             calls[0] += 1
             note = reminder
             left = step_limit - calls[0] if step_limit else 99
