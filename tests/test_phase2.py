@@ -898,3 +898,24 @@ def test_lead_check_in_revises_steps_not_yet_started(tmp_path):
     assert goals["s2"] == "use seed 710c1315 from s1 to decrypt" and "Steps that have not started" in calls[1]
     review = next(e for e in trace.events if e["event"] == "lead_review")
     assert review["changed"] == ["s2"] and orch.steps["s2"].difficulty == 0
+
+
+def test_labels_from_traces_and_trained_policy(tmp_path):
+    from phase2 import labels
+
+    agent = tmp_path / "job" / "trial" / "agent"
+    agent.mkdir(parents=True)
+    ev = [{"event": "plan", "steps": [{"id": "s1", "goal": "find seed"}, {"id": "s2", "goal": "write report"}]},
+          {"event": "attempt", "step": "s1", "model": "droid/claude-haiku-5-5", "passed": False},
+          {"event": "attempt", "step": "s1", "model": "droid/claude-sonnet-5-5", "passed": True},
+          {"event": "attempt", "step": "s2", "model": "claude/claude-haiku-5-5", "passed": True}]
+    (agent / "trace.jsonl").write_text("\n".join(json.dumps(e) for e in ev))
+    rows = {r["text"]: r for r in labels.collect([str(tmp_path)])["steps"]}
+    assert (rows["find seed"]["label"], rows["find seed"]["censored"]) == (1, False)
+    assert (rows["write report"]["label"], rows["write report"]["censored"]) == (0, False)
+    assert labels.strength("droid/gpt-6.1-sol") == 2 and labels.strength("droid/glm-5.3") == 1
+    cfg = load_config(policy="trained", laya_head="unused.json")
+    r = Router(cfg, laya=None, arch=None)
+    r.head_fn = lambda text: 0.2 if "report" in text else 1.9
+    assert r.route("s2", "write report").tier == 0 and r.route("s1", "hard").source == "trained"
+

@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import time
+from pathlib import Path
 from dataclasses import asdict, dataclass
 
 TIER_QUESTION = {
@@ -98,13 +99,24 @@ class ArchScorer:
 
 
 class Router:
-    """policy: planner | cascade | laya | arch | random | fixed:<tier>. Scorers are injectable for tests."""
+    """policy: planner | trained | cascade | laya | arch | random | fixed:<tier>. Scorers are injectable for tests."""
 
     def __init__(self, cfg, laya=None, arch=None):
         self.cfg = cfg
         self.laya = laya or LayaScorer()
         self.arch = arch or ArchScorer()
         self.max_tier = cfg.max_route_tier
+
+    def _trained(self, text: str) -> float:
+        """Expected strength class (0..2) from the trained head; `self.head_fn` is injectable for tests."""
+        if getattr(self, "head_fn", None) is None:
+            import numpy as np
+
+            from .train_head import laya_features, predict_proba
+
+            head = json.loads(Path(self.cfg.laya_head).read_text())["model"]
+            self.head_fn = lambda t: float((predict_proba(head, laya_features([t]))[0] * np.arange(3)).sum())
+        return self.head_fn(text)
 
     def _clip(self, score: float) -> int:
         """Map a difficulty score on Laya/Arch's 0..2 scale onto the routable tiers 0..max_tier."""
@@ -120,6 +132,10 @@ class Router:
             return RouteDecision(self._clip(hint), "planner", float(hint), None, 0.0, "planner's difficulty rating")
         if p == "planner":
             p = "laya"  # no rating: fall back to Laya
+        if p == "trained":  # Laya features through the head trained by phase2.train_head (cfg.laya_head)
+            s = self._trained(text)
+            return RouteDecision(self._clip(s), "trained", s, None, (time.perf_counter() - t0) * 1e3,
+                                 f"trained head on Laya ({self.cfg.laya_head})")
         if p.startswith("fixed:"):
             tier = int(p.split(":", 1)[1])
             if not 0 <= tier < len(self.cfg.tiers):

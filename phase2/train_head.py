@@ -83,23 +83,60 @@ def kfold_eval(X, y, k_classes, folds=6, seed=570):
             "oof_proba": oof.tolist()}
 
 
+def rows_from_data(path: str, kinds=("steps", "tasks")) -> tuple[list[str], np.ndarray]:
+    """Rows from `python -m phase2.labels`: one per distinct text (pinned plans repeat steps; duplicates would
+    leak across folds), keeping the highest label seen for a text (the most it ever needed)."""
+    data = json.loads(Path(path).read_text())
+    best: dict[str, int] = {}
+    for kind in kinds:
+        for r in data.get(kind, []):
+            t = " ".join(r["text"].split())[:4000]
+            best[t] = max(best.get(t, 0), int(r["label"]))
+    texts = sorted(best)
+    return texts, np.array([best[t] for t in texts])
+
+
+def baselines(texts, y, k) -> dict:
+    """What the trained head must beat: always the most common class, and untrained (zero-shot) Laya."""
+    from .router import LayaScorer
+
+    majority = float((y == np.bincount(y, minlength=k).argmax()).mean())
+    scorer = LayaScorer()
+    zs = np.array([min(max(int(np.floor(scorer(t)[0] + 0.5)), 0), k - 1) for t in texts])
+    return {"majority_accuracy": majority, "zero_shot_accuracy": float((zs == y).mean()),
+            "zero_shot_within_one": float((abs(zs - y) <= 1).mean())}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tasks", required=True)
-    ap.add_argument("--labels", required=True)
+    ap.add_argument("--tasks")
+    ap.add_argument("--labels")
+    ap.add_argument("--data", help="labels JSON from python -m phase2.labels (instead of --tasks/--labels)")
     ap.add_argument("--out", default="head.json")
     ap.add_argument("--folds", type=int, default=6)
     args = ap.parse_args(argv)
-    texts = json.loads(Path(args.tasks).read_text())
-    lab = json.loads(Path(args.labels).read_text())
-    ids = sorted(set(texts) & set(lab))
-    X, y = laya_features([texts[i] for i in ids]), np.array([lab[i] for i in ids])
+    if args.data:
+        texts_l, y = rows_from_data(args.data)
+        ids = [f"row{i}" for i in range(len(texts_l))]
+        X = laya_features(texts_l)
+    else:
+        texts = json.loads(Path(args.tasks).read_text())
+        lab = json.loads(Path(args.labels).read_text())
+        ids = sorted(set(texts) & set(lab))
+        texts_l = [texts[i] for i in ids]
+        X, y = laya_features(texts_l), np.array([lab[i] for i in ids])
     k = int(y.max()) + 1
     cv = kfold_eval(X, y, k, args.folds)
     model = fit_softmax(X, y, k)
     Path(args.out).write_text(json.dumps({"tasks": ids, "cv": {kk: v for kk, v in cv.items() if kk != "oof_proba"},
                                           "model": model, "questions": list(FEATURE_QUESTIONS)}, indent=2))
-    print(json.dumps({"n": len(ids), "accuracy": cv["accuracy"], "within_one": cv["within_one"]}))
+    base = baselines(texts_l, y, k) if args.data else {}
+    report = {"n": len(ids), "per_class": np.bincount(y, minlength=k).tolist(), "accuracy": cv["accuracy"],
+              "within_one": cv["within_one"], **base}
+    out = json.loads(Path(args.out).read_text())
+    out["report"] = report
+    Path(args.out).write_text(json.dumps(out, indent=2))
+    print(json.dumps(report))
 
 
 if __name__ == "__main__":

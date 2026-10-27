@@ -79,6 +79,7 @@ class HarnessConfig:
     # The planner as tech lead: read-only exploration commands before planning (0 = off), and check-ins that
     # revise steps not yet started after another step ends (0 = off).
     planner_explore: int = 0
+    laya_head: str = ""  # head.json from phase2.train_head, for policy "trained"
     lead_reviews: int = 0
     # Ablation switches for prompt features (all on by default)
     team_roster: bool = True       # TEAM roster lines in each worker's first prompt
