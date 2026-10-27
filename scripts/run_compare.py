@@ -96,7 +96,7 @@ def summary(prefix: str) -> None:
     print()
     for s, a in agg.items():
         per = lambda k: a[k] / a["passed"] if a["passed"] else float("nan")
-        print(f"{s:7s} runs={a['runs']} valid={a['valid']} passed={a['passed']} mean_tests={a['frac'] / max(a['runs'], 1):.2f} "
+        print(f"{s:7s} runs={a['runs']} valid={a['valid']} passed={a['passed']} mean_tests={a["frac"] / max(a["valid"], 1):.2f} "
               f"usd={a['usd']:.2f} credits={a['credits']:,.0f} minutes={a['minutes']:.0f} "
               f"credits/solve={per('credits'):,.0f} usd/solve={per('usd'):.2f}")
 
