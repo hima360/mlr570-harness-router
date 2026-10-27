@@ -76,6 +76,10 @@ class HarnessConfig:
     # Best-of-N: a final step's first attempt runs as parallel candidates, one per model listed (each in its own
     # copy of the work folder); the best is kept. [] = off. File-based tasks only.
     best_of_models: list = field(default_factory=list)
+    # The planner as tech lead: read-only exploration commands before planning (0 = off), and check-ins that
+    # revise steps not yet started after another step ends (0 = off).
+    planner_explore: int = 0
+    lead_reviews: int = 0
     # Ablation switches for prompt features (all on by default)
     team_roster: bool = True       # TEAM roster lines in each worker's first prompt
     recency_reminder: bool = True  # step + one-command rule restated at the end of every call

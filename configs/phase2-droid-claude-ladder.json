@@ -39,5 +39,7 @@
   "merge_chains": true,
   "max_run_credits": 500000,
   "reviewer_model": "droid/gpt-6-luna",
-  "acceptance_model": "droid/gpt-6.1-sol"
+  "acceptance_model": "droid/gpt-6.1-sol",
+  "planner_explore": 8,
+  "lead_reviews": 2
 }

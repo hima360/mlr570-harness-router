@@ -57,6 +57,21 @@ REPAIR_STEP_LIMIT = 4  # model calls for the missing-outputs repair turn: write 
 INFRA_EXITS = ("ProviderUnavailable", "ModelTimedOut", "StepIdle")
 MAX_ATTEMPTS = 3  # per step: first try, one escalation, one more when the error handler asks for it
 
+LEAD_PROMPT = """You are the lead of a team of coding agents working on this task:
+{task}
+
+Finished steps and what they found:
+{done}
+
+Steps that have not started yet (JSON, one per line):
+{todo}
+
+Using what the finished steps found (or why they failed), revise the steps that have not started only where it
+clearly helps: make a goal more precise (name the files, values or approach now known), fix a check that would
+not work, or change a difficulty (0 easy, 1 medium, 2 hard: it picks the model). Do not add or remove steps.
+Reply with only JSON: {{"updates": [{{"id": "...", "goal": "...", "check": "...", "difficulty": 0}}]}}; use an empty
+list when the plan is still right."""
+
 FIXER_ACTIONS = ("rerun_dependency", "retry", "escalate", "stop")
 FIXER_PROMPT = """You are the error handler for a team of coding agents. A step failed. You do NOT do the work and
 you cannot run commands: read the incident and choose ONE recovery action for the harness to carry out.
@@ -93,6 +108,7 @@ class Orchestrator:
         self.cfg, self.ledger, self.trace, self.router = cfg, ledger, trace, router
         self.ask_planner, self.work, self.ask_fixer = ask_planner, work, ask_fixer
         self.interventions = 0
+        self.reviews, self._review_lock = 0, asyncio.Lock()
         self.env_block, self.workdir, self.snapshot = "", "/app", ""
         self.steps, self.records = {}, {}
         self.logs_dir = logs_dir
@@ -115,8 +131,12 @@ class Orchestrator:
             plan = single_step_plan(instruction)
             plan_info = {"attempts": 0, "fallback": False, "errors": [], "planner": "skipped"}
         else:
+            loop = asyncio.get_running_loop()
+            explore = (lambda cmd: asyncio.run_coroutine_threadsafe(self._explore(environment, cmd), loop).result()) \
+                if self.cfg.planner_explore else None
             plan, plan_info = await asyncio.to_thread(
-                make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps)
+                make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps, explore,
+                self.cfg.planner_explore)
         shape = plan_shape(plan)
         self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan),
                        planner_model=self.cfg.planner_model, **shape, **plan_info)
@@ -286,6 +306,21 @@ class Orchestrator:
             record["passed"] = verdict.passed
             bb.update(s.id, status="done" if verdict.passed else "failed")
 
+    async def _explore(self, environment, command: str) -> str:
+        """One read-only command for the planner (refused unless every pipe segment only reads)."""
+        from .planner import read_only
+
+        if not read_only(command):
+            out = "Refused: only read-only commands are allowed (ls, cat, head, grep, find, wc, sed -n, git log/diff/show)."
+        else:
+            try:
+                r = await environment.exec(f"cd {self.workdir} 2>/dev/null; {command}", timeout_sec=30)
+                out = ((r.stdout or "") + (r.stderr or ""))[:4000] or "(no output)"
+            except Exception as e:
+                out = f"(failed: {e})"
+        self.trace.log("explore", command=command[:300], chars=len(out))
+        return out
+
     async def _discover_tests(self, environment) -> str:
         """The task's own test commands, found once at the start: hidden tests usually look like them."""
         try:
@@ -304,7 +339,7 @@ class Orchestrator:
             return f"(listing failed: {e})"
 
     async def _run_step(self, step, instruction, environment, bb) -> dict:
-        decision = self.router.route(step.id, step.goal)
+        decision = self.router.route(step.id, step.goal, hint=step.difficulty)
         self.trace.log("route", step=step.id, model=self.cfg.tiers[decision.tier], **decision.to_dict())
         record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False,
                   "tier": decision.tier}
@@ -374,7 +409,45 @@ class Orchestrator:
             record["tier"] += 1
         bb.update(step.id, status="done" if record["passed"] else "failed")
         self.trace.log("step_end", step=step.id, passed=record["passed"], attempts=len(record["attempts"]))
+        await self._lead_review(step, record, instruction, bb)
         return record
+
+    async def _lead_review(self, step, record, instruction, bb) -> None:
+        """A lead check-in: after a step ends, the planner may revise the goals, checks and difficulty of steps
+        that have not started, using what just happened (facts found, a failure). At most cfg.lead_reviews."""
+        pending = [s for s in self.steps.values() if bb.entries[s.id].status == "pending"]
+        if not pending or self.reviews >= self.cfg.lead_reviews or self.over_budget(self.cfg.top_tier_budget_frac):
+            return
+        async with self._review_lock:
+            if self.reviews >= self.cfg.lead_reviews:
+                return
+            self.reviews += 1
+            done = "\n".join(f"- {sid} [{e.status}] {e.goal[:200]}\n  results: {facts_text(sid, e.outputs, 600) or '-'}"
+                             f"\n  report: {e.summary[:300] or '-'}" for sid, e in bb.entries.items()
+                             if e.status in ("done", "failed"))
+            todo = "\n".join(json.dumps({"id": s.id, "goal": s.goal[:1500], "check": s.check,
+                                          "difficulty": s.difficulty}) for s in pending)
+            prompt = LEAD_PROMPT.format(task=instruction[:2000], done=done, todo=todo)
+            try:
+                reply = await asyncio.to_thread(self.ask_planner, [{"role": "user", "content": prompt}])
+                m = re.search(r"\{.*\}", reply or "", re.S)
+                updates = (json.loads(m.group(0)).get("updates") or []) if m else []
+            except Exception as e:
+                self.trace.log("lead_review", after=step.id, error=str(e)[:300])
+                return
+            changed = []
+            for u in updates:
+                s = self.steps.get(u.get("id")) if isinstance(u, dict) else None
+                if s is None or bb.entries[s.id].status != "pending":
+                    continue  # only steps that have not started can change
+                for k in ("goal", "check"):
+                    if isinstance(u.get(k), str) and u[k].strip():
+                        setattr(s, k, u[k].strip())
+                if u.get("difficulty") in (0, 1, 2):
+                    s.difficulty = u["difficulty"]
+                bb.entries[s.id].goal = s.goal
+                changed.append(s.id)
+            self.trace.log("lead_review", after=step.id, changed=changed, n=self.reviews)
 
     async def _attempt(self, step, record, handoff, environment, bb):
         """One worker attempt at the record's current tier: work, collect outputs (with one repair turn

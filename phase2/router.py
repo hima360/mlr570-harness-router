@@ -98,7 +98,7 @@ class ArchScorer:
 
 
 class Router:
-    """policy: cascade | laya | arch | random | fixed:<tier>. Scorers are injectable for tests."""
+    """policy: planner | cascade | laya | arch | random | fixed:<tier>. Scorers are injectable for tests."""
 
     def __init__(self, cfg, laya=None, arch=None):
         self.cfg = cfg
@@ -112,9 +112,14 @@ class Router:
         scaled = math.floor(score / 2 * self.max_tier + 0.5)
         return int(min(max(scaled, 0), self.max_tier))
 
-    def route(self, step_id: str, text: str) -> RouteDecision:
+    def route(self, step_id: str, text: str, hint: int | None = None) -> RouteDecision:
+        """`hint`: the planner's difficulty rating (0..2) for this step, used by the planner policies."""
         p = self.cfg.policy
         t0 = time.perf_counter()
+        if p == "planner" and hint is not None:  # the planner, who read the code, distributes the work
+            return RouteDecision(self._clip(hint), "planner", float(hint), None, 0.0, "planner's difficulty rating")
+        if p == "planner":
+            p = "laya"  # no rating: fall back to Laya
         if p.startswith("fixed:"):
             tier = int(p.split(":", 1)[1])
             if not 0 <= tier < len(self.cfg.tiers):

@@ -849,3 +849,52 @@ def test_best_of_runs_candidates_in_copies_and_keeps_the_best(tmp_path):
     assert any(c.startswith("cp -a /tmp/cand/1/app/. /app/") for c in cmds)
     acc_check = next(e for e in trace.events if e["event"] == "acceptance")
     assert acc_check is not None
+
+
+# ---------- the planner as tech lead ----------
+
+def test_planner_explores_read_only_then_plans():
+    from phase2.planner import read_only
+
+    assert read_only("grep -rn flush src | head -20") and read_only("sed -n 1,80p src/a.cc")
+    for bad in ("rm -rf /app", "cat a > b", "ls; rm x", "sed -i s/a/b/ f", "find . -delete", "echo $(id)"):
+        assert not read_only(bad), bad
+    replies = iter(['{"explore": "ls src"}', '{"explore": "grep -n flush src/lsm.cc"}',
+                    plan_json(("s1", [], [], "true"))])
+    ran = []
+    plan, info = make_plan("task", "ls", lambda m: next(replies), 8, explore=lambda c: ran.append(c) or "out", max_explore=8)
+    assert ran == ["ls src", "grep -n flush src/lsm.cc"] and info["explored"] == ran and plan.steps[0].id == "s1"
+    replies = iter(['{"explore": "ls"}', '{"explore": "ls"}', plan_json(("s1", [], [], "true"))])
+    plan, info = make_plan("task", "ls", lambda m: next(replies), 8, explore=lambda c: "x", max_explore=1)
+    assert info["explored"] == ["ls"] and not info["fallback"]  # over budget: told to plan now
+
+
+def test_planner_policy_routes_on_the_planners_difficulty():
+    cfg = load_config(policy="planner", tiers=["a/cheap", "b/mid", "c/top"],
+                      prices_per_million={m: {"input": 1, "cached": 0.1, "output": 1}
+                                          for m in ("a/cheap", "b/mid", "c/top", "anthropic/claude-opus-5-5")})
+    r = Router(cfg, laya=FakeScorer((1.5, 0.9)), arch=None)
+    assert r.route("s1", "write up", hint=0).tier == 0 and r.route("s2", "hard", hint=2).tier == 1
+    assert r.route("s3", "unrated").source == "laya"
+
+
+def test_lead_check_in_revises_steps_not_yet_started(tmp_path):
+    cfg = load_config(policy="fixed:0", lead_reviews=2)
+    goals, calls = {}, []
+
+    def ask(messages):
+        calls.append(messages[0]["content"])
+        if len(calls) == 1:
+            return plan_json(("s1", [], [], "true"), ("s2", ["s1"], [], "true"))
+        return '{"updates": [{"id": "s2", "goal": "use seed 710c1315 from s1 to decrypt", "difficulty": 0}]}'
+
+    def work(step, *a):
+        goals[step.id] = step.goal
+        return WorkerResult("Submitted", "", 1)
+
+    trace = Trace(None)
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None), ask, work, tmp_path)
+    asyncio.run(orch.run("task", FakeEnvironment()))
+    assert goals["s2"] == "use seed 710c1315 from s1 to decrypt" and "Steps that have not started" in calls[1]
+    review = next(e for e in trace.events if e["event"] == "lead_review")
+    assert review["changed"] == ["s2"] and orch.steps["s2"].difficulty == 0

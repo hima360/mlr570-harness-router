@@ -30,6 +30,9 @@ For each step give:
 - effort: "low" only for steps that just assemble or write results other steps already found; omit otherwise
 - continues: optional id of one step in depends_on whose line of work this step carries on (it then
   continues that step's working memory); omit otherwise
+- difficulty: 0 = easy (a modest model can do it: writing up known results, formatting, a simple edit),
+  1 = medium, 2 = hard (deep reasoning, reverse engineering, subtle concurrency or numerics). Be honest:
+  it decides which model does the step, cheaper for easier steps.
 
 Before chaining steps, ask what each step needs to know. If another step finds it (a key, a seed, a
 host, a decoded file), depend on that step and name it as one of that step's outputs. Steps that need
@@ -63,6 +66,12 @@ Current directory listing:
 Reply with only JSON: {{"workstreams": ["..."], "steps": [{{"id": "...", "goal": "...", "depends_on": [], "writes": [],
 "outputs": [], "check": ""}}]}}"""
 
+EXPLORE_PROMPT = """
+Before you plan, look at the task's files like a tech lead would: you may run up to {n} read-only commands
+(ls, cat, head, tail, grep, find, wc, sed -n, git log / diff / show, pip list). To run one, reply with only
+{{"explore": "<one command>"}} and you will get its output. Read what matters for splitting the work (code
+layout, tests, data, configs). When you know enough, reply with the plan JSON."""
+
 REPAIR_PROMPT = """Your plan was rejected: {error}
 Reply with only the corrected JSON plan in the same format."""
 
@@ -84,6 +93,7 @@ class Step(BaseModel):
     check: str = ""
     effort: str = ""  # "low": the worker runs at low reasoning effort (assembling known results)
     continues: str = ""  # a step in depends_on whose CLI session this step forks (keeps its working memory)
+    difficulty: int | None = Field(default=None, ge=0, le=2)  # the planner's rating; policy "planner" routes on it
     # Set by the harness only (repair turns, merged chains); not part of the plan.
     worker_step_limit: int | None = Field(default=None, exclude=True)
     wall_time_sec: int | None = Field(default=None, exclude=True)
@@ -180,7 +190,9 @@ def merge_chain(plan: Plan, step_limit: int, wall_time_sec: int, max_steps: int 
         lines.append(f"{n}. [{s.id}] {s.goal}" + (f"\n   Publish as name=value in /tmp/steps/{s.id}/outputs.txt: {facts}"
                                                    if facts else "") + (f"\n   Create: {files}" if files else ""))
     writes = sorted({w for s in parts for w in s.writes})
+    rated = [s.difficulty for s in parts if s.difficulty is not None]
     merged = Step(id="all", goal="Do the whole task yourself, part by part, in this order:\n" + "\n".join(lines),
+                  difficulty=max(rated) if rated else None,
                   writes=["**"] if "**" in writes else writes,
                   check=" && ".join(f"( {s.check} )" for s in parts if s.check.strip()),
                   effort="" if any(s.effort != "low" for s in parts) else "low")
@@ -215,12 +227,17 @@ def load_pinned_plan(path, max_steps: int) -> Plan:
     raise PlanError(f"no plan event in {p}")
 
 
-def make_plan(instruction: str, env_summary: str, ask, max_steps: int) -> tuple[Plan, dict]:
-    """`ask(messages) -> str` is the model call. One repair attempt, then a single-step fallback."""
-    messages = [{"role": "user", "content": PLANNER_PROMPT.format(
-        max_steps=max_steps, instruction=instruction, env_summary=env_summary[:4000])}]
-    info = {"attempts": 0, "fallback": False, "errors": []}
-    for _ in range(2):
+def make_plan(instruction: str, env_summary: str, ask, max_steps: int, explore=None,
+              max_explore: int = 8) -> tuple[Plan, dict]:
+    """`ask(messages) -> str` is the model call. With `explore(command) -> output`, the planner first looks
+    around with up to `max_explore` read-only commands. One repair attempt, then a single-step fallback."""
+    prompt = PLANNER_PROMPT.format(max_steps=max_steps, instruction=instruction, env_summary=env_summary[:4000])
+    if explore:
+        prompt += EXPLORE_PROMPT.format(n=max_explore)
+    messages = [{"role": "user", "content": prompt}]
+    info = {"attempts": 0, "fallback": False, "errors": [], "explored": []}
+    repairs = 0
+    while info["attempts"] < max_explore + 4:
         info["attempts"] += 1
         try:
             reply = ask(messages)
@@ -228,11 +245,51 @@ def make_plan(instruction: str, env_summary: str, ask, max_steps: int) -> tuple[
             # refused Opus on legacy-utility-triage and the whole trial crashed): run the task as one step
             info["errors"].append(f"planner call failed: {type(e).__name__}: {str(e)[-300:]}")
             break
+        cmd = _explore_request(reply)
+        if cmd is not None:
+            if explore and len(info["explored"]) < max_explore:
+                info["explored"].append(cmd[:200])
+                out = explore(cmd)
+                messages += [{"role": "assistant", "content": reply}, {"role": "user", "content": f"$ {cmd}\n{out}"}]
+            else:
+                repairs += 1
+                messages += [{"role": "assistant", "content": reply},
+                             {"role": "user", "content": "No more exploration: reply with the plan JSON now."}]
+            if repairs >= 2:
+                break
+            continue
         try:
             return parse_plan(reply, max_steps), info
         except PlanError as e:
             info["errors"].append(str(e))
+            repairs += 1
+            if repairs >= 2:
+                break
             messages += [{"role": "assistant", "content": reply},
                          {"role": "user", "content": REPAIR_PROMPT.format(error=e)}]
     info["fallback"] = True
     return single_step_plan(instruction), info
+
+
+def _explore_request(reply: str) -> str | None:
+    """The command of an {"explore": "..."} reply, or None for anything else (such as a plan)."""
+    m = re.search(r"\{.*\}", reply or "", re.DOTALL)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    if isinstance(obj, dict) and isinstance(obj.get("explore"), str) and "steps" not in obj:
+        return obj["explore"].strip()
+    return None
+
+
+READ_ONLY = re.compile(r"^\s*(ls|cat|head|tail|grep|rg|find|wc|file|tree|stat|du|sed -n|awk|sort|uniq|cut|nl|"
+                       r"git (log|status|diff|show|ls-files)|pip3? (list|show)|python3? --version|which)\b")
+NOT_READ_ONLY = re.compile(r">|\brm\b|\bmv\b|\bcp\b|\bchmod\b|\bchown\b|\btee\b|-delete|-exec|\bsudo\b|`|\$\(|;|&&|\|\|")
+
+
+def read_only(command: str) -> bool:
+    """A planner's exploration command may only read: every pipe segment must be an allowed reader."""
+    return not NOT_READ_ONLY.search(command) and all(READ_ONLY.match(seg) for seg in command.split("|"))
