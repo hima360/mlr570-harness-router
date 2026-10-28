@@ -129,6 +129,11 @@ class Router:
         p = self.cfg.policy
         t0 = time.perf_counter()
         if p == "planner" and hint is not None:  # the planner, who read the code, distributes the work
+            if hint >= 2 and self.cfg.planner_top_tier:
+                # 2026-10-27: a step rated hard went to Sonnet, passed its own weak check, never escalated, and
+                # missed the one model (Opus) that solved the task; hard steps may start on the top tier.
+                return RouteDecision(len(self.cfg.tiers) - 1, "planner", float(hint), None, 0.0,
+                                     "planner rated it hard: top tier")
             return RouteDecision(self._clip(hint), "planner", float(hint), None, 0.0, "planner's difficulty rating")
         if p == "planner":
             p = "laya"  # no rating: fall back to Laya

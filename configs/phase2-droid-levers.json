@@ -45,5 +45,6 @@
   "best_of_models": [
     "droid/claude-sonnet-5-5",
     "droid/claude-opus-5-5"
-  ]
+  ],
+  "planner_top_tier": true
 }

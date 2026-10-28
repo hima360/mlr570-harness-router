@@ -42,5 +42,6 @@
   "acceptance_model": "",
   "planner_explore": 8,
   "lead_reviews": 2,
-  "best_of_models": []
+  "best_of_models": [],
+  "planner_top_tier": true
 }

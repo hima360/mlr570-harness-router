@@ -80,6 +80,7 @@ class HarnessConfig:
     # revise steps not yet started after another step ends (0 = off).
     planner_explore: int = 0
     laya_head: str = ""  # head.json from phase2.train_head, for policy "trained"
+    planner_top_tier: bool = False  # policy "planner": a step rated 2 (hard) starts on the top tier, not escalation-only
     lead_reviews: int = 0
     # Ablation switches for prompt features (all on by default)
     team_roster: bool = True       # TEAM roster lines in each worker's first prompt

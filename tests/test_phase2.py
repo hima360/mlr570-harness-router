@@ -876,6 +876,8 @@ def test_planner_policy_routes_on_the_planners_difficulty():
     r = Router(cfg, laya=FakeScorer((1.5, 0.9)), arch=None)
     assert r.route("s1", "write up", hint=0).tier == 0 and r.route("s2", "hard", hint=2).tier == 1
     assert r.route("s3", "unrated").source == "laya"
+    cfg.planner_top_tier = True
+    assert r.route("s2", "hard", hint=2).tier == 2 and r.route("s1", "write up", hint=0).tier == 0
 
 
 def test_lead_check_in_revises_steps_not_yet_started(tmp_path):
