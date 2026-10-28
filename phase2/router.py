@@ -98,11 +98,62 @@ class ArchScorer:
         return float((p * np.arange(len(ARCH_ROUTES))).sum())
 
 
-class Router:
-    """policy: planner | trained | cascade | laya | arch | random | fixed:<tier>. Scorers are injectable for tests."""
+D1_TIER_QUESTION = {"tier": {
+    "type": "score", "instructions": "How capable must a coding agent be to finish this step correctly?",
+    "criteria": ["a small fast model is enough (a simple edit, writing up known results, formatting)",
+                 "a strong mid-size model is needed (a multi-file change, debugging, careful testing)",
+                 "only a frontier model will do (deep reasoning, reverse engineering, subtle concurrency)"]}}
 
-    def __init__(self, cfg, laya=None, arch=None):
+
+class D1Scorer:
+    """Liquid AI's d1-2B decision model (LFM3, 1.92B), as a second small local router beside Laya. It runs in
+    its own venv as a child process (phase2.d1_server) that loads the model once; each step costs one call,
+    50-270 ms on this Mac's GPU after a ~2 min first load (measured 2026-10-28)."""
+
+    name = "d1-2B (Liquid AI, local)"
+
+    def __init__(self, python: str = ".venv-d1/bin/python", model: str = "LiquidAI/d1-2B", revision: str = ""):
+        self.python, self.model, self.revision = python, model, revision
+        self._proc = None
+
+    def _start(self):
+        import subprocess
+        import sys
+
+        root = Path(__file__).resolve().parents[1]
+        argv = [self.python if Path(self.python).is_absolute() else str(root / self.python), "-m", "phase2.d1_server",
+                "--model", self.model] + (["--revision", self.revision] if self.revision else [])
+        self._proc = subprocess.Popen(argv, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        ready = json.loads(self._proc.stdout.readline() or "{}")
+        if not ready.get("ready"):
+            raise RuntimeError(f"d1 server did not start ({argv[0]}); see phase2/d1_server.py")
+        del sys
+
+    def ask(self, text: str, questions: dict) -> dict:
+        if self._proc is None or self._proc.poll() is not None:
+            self._start()
+        self._proc.stdin.write(json.dumps({"text": text, "questions": questions}) + "\n")
+        self._proc.stdin.flush()
+        reply = json.loads(self._proc.stdout.readline())
+        if "error" in reply:
+            raise RuntimeError(reply["error"])
+        return reply["answers"]
+
+    def __call__(self, text: str) -> tuple[float, float]:
+        """Expected level (0..2) from d1's probabilities, and its confidence."""
+        a = self.ask(text, D1_TIER_QUESTION)["tier"]
+        probs = a.get("probabilities") or {}
+        score = sum(int(k) * float(v) for k, v in probs.items()) if probs else float(a.get("score", 1))
+        return score, float(a.get("confidence", 0.0))
+
+
+class Router:
+    """policy: planner | d1 | trained | cascade | laya | arch | random | fixed:<tier>. Scorers are injectable for tests."""
+
+    def __init__(self, cfg, laya=None, arch=None, d1=None):
         self.cfg = cfg
+        self.d1 = d1 or D1Scorer(cfg.d1_python, cfg.d1_model, cfg.d1_revision)
         self.laya = laya or LayaScorer()
         self.arch = arch or ArchScorer()
         self.max_tier = cfg.max_route_tier
@@ -137,6 +188,9 @@ class Router:
             return RouteDecision(self._clip(hint), "planner", float(hint), None, 0.0, "planner's difficulty rating")
         if p == "planner":
             p = "laya"  # no rating: fall back to Laya
+        if p == "d1":  # Liquid AI's d1-2B, zero-shot
+            s, conf = self.d1(text)
+            return RouteDecision(self._clip(s), "d1", s, conf, (time.perf_counter() - t0) * 1e3, _name(self.d1))
         if p == "trained":  # Laya features through the head trained by phase2.train_head (cfg.laya_head)
             s = self._trained(text)
             return RouteDecision(self._clip(s), "trained", s, None, (time.perf_counter() - t0) * 1e3,

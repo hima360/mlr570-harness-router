@@ -1,0 +1,7 @@
+{"model": "LiquidAI/d1-2B", "revision": "97c57047d5852d77e02dfac211f8768aff77a8b2",
+ "labels": "phase2_data/labels_steps_2026-10-27.json (99 distinct step texts after dedupe)",
+ "question": "phase2.router.D1_TIER_QUESTION (3-level score, expected level rounded)",
+ "per_class": [10, 52, 37], "d1_accuracy": 0.556, "d1_within_one": 0.970, "d1_pred_counts": [3, 75, 21],
+ "by_confidence": {"<0.5": {"n": 18, "acc": 0.389}, "0.5-0.7": {"n": 44, "acc": 0.591}, ">=0.7": {"n": 37, "acc": 0.595}},
+ "baselines_same_rows": {"majority_class": 0.525, "zero_shot_laya": 0.545, "trained_laya_head_6fold": 0.505},
+ "latency": "about 2 min first load, then 50-270 ms per question on Apple MPS, bf16"}

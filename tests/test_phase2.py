@@ -921,3 +921,19 @@ def test_labels_from_traces_and_trained_policy(tmp_path):
     r.head_fn = lambda text: 0.2 if "report" in text else 1.9
     assert r.route("s2", "write report").tier == 0 and r.route("s1", "hard").source == "trained"
 
+
+def test_d1_policy_routes_on_the_decision_models_expected_level():
+    from phase2.router import D1Scorer
+
+    cfg = load_config(policy="d1")
+
+    class FakeD1(D1Scorer):
+        def ask(self, text, questions):
+            assert "tier" in questions and questions["tier"]["type"] == "score"
+            p = {"0": 0.9, "1": 0.05, "2": 0.05} if "write" in text else {"0": 0.02, "1": 0.08, "2": 0.9}
+            return {"tier": {"score": 0, "confidence": 0.9, "probabilities": p}}
+
+    r = Router(cfg, laya=None, arch=None, d1=FakeD1())
+    easy, hard = r.route("s1", "write up the results"), r.route("s2", "reverse engineer the vm")
+    assert (easy.tier, easy.source) == (0, "d1") and hard.tier == cfg.max_route_tier and hard.confidence == 0.9
+
