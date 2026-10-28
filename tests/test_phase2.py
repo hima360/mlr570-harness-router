@@ -622,8 +622,71 @@ def test_handler_is_offered_only_actions_still_possible(tmp_path):
                         lambda m: plan_json(("s1", [], [], "check-s1")),
                         lambda *a: WorkerResult("Submitted", "", 1), tmp_path, ask_fixer=ask_fixer)
     asyncio.run(orch.run("task", FakeEnvironment(lambda c: ("", next(checks)) if c == "check-s1" else ("", 0))))
-    assert "AVAILABLE ACTIONS NOW: retry, escalate, stop" in prompts[0]
-    assert "AVAILABLE ACTIONS NOW: retry, stop" in prompts[1]  # escalation already used
+    assert "AVAILABLE ACTIONS NOW: retry, escalate, revise_check, stop" in prompts[0]
+    assert "AVAILABLE ACTIONS NOW: retry, revise_check, stop" in prompts[1]  # escalation already used
+    assert "Suspect the check" in prompts[1] and "Suspect the check" not in prompts[0]
+
+
+def test_parse_fix_revise_check_needs_a_check_string():
+    from phase2.orchestrator import parse_fix
+
+    assert parse_fix('{"action": "revise_check", "check": " test -s out ", "note": "n"}', [])["check"] == "test -s out"
+    assert parse_fix('{"action": "revise_check", "check": ""}', [])["check"] == ""
+    assert parse_fix('{"action": "revise_check"}', [])["invalid"]
+
+
+def test_a_check_that_fails_twice_is_revised_past_the_handler_cap(tmp_path):
+    cfg = load_config(policy="fixed:0", fixer_model="anthropic/claude-opus-5-5", max_interventions=1)
+    replies = iter(['{"action": "retry", "note": "again"}',
+                    '{"action": "revise_check", "check": "check-new", "note": "the data has typos"}'])
+    prompts, calls, trace = [], [], Trace(None)
+
+    def ask_fixer(messages):
+        prompts.append(messages[0]["content"])
+        return next(replies)
+
+    def work(step, model_id, *a):
+        calls.append(model_id)
+        return WorkerResult("Submitted", "", 1)
+
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: plan_json(("s1", [], [], "check-old")), work, tmp_path, ask_fixer=ask_fixer)
+    summary = asyncio.run(orch.run("task", FakeEnvironment(lambda c: ("", 1) if c == "check-old" else ("", 0))))
+    assert summary["steps"]["s1"]["passed"] and len(calls) == 2 and len(prompts) == 2  # no third attempt
+    assert "Suspect the check" not in prompts[0] and "Suspect the check" in prompts[1]
+    ev = next(e for e in trace.events if e["event"] == "check_revised")
+    assert (ev["old"], ev["new"], ev["passed"]) == ("check-old", "check-new", True)
+
+
+def test_one_step_plan_runs_as_the_single_agent(tmp_path):
+    cfg = load_config(policy="planner", planner_top_tier=True, single_step_tier=1, worker_step_limit=40,
+                      step_wall_time_sec=600)
+    seen, trace = [], Trace(None)
+
+    def work(step, model_id, *a):
+        seen.append((step, model_id))
+        return WorkerResult("Submitted", "", 1)
+
+    hard = json.dumps({"steps": [{"id": "s1", "goal": "do it", "check": "true", "difficulty": 2}]})
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None),
+                        lambda m: hard, work, tmp_path)
+    asyncio.run(orch.run("task", FakeEnvironment()))
+    step, model = seen[0]
+    assert model == cfg.tiers[1] and (step.worker_step_limit, step.wall_time_sec) == (80, 1200)
+    assert next(e for e in trace.events if e["event"] == "route")["source"] == "single_step"
+    # two steps: the planner's rating routes as before
+    seen.clear()
+    two = json.dumps({"steps": [{"id": "a", "goal": "x", "check": "true", "difficulty": 2},
+                                {"id": "b", "goal": "y", "check": "true", "difficulty": 0}]})
+    orch2 = Orchestrator(cfg, Ledger(cfg.prices_per_million), Trace(None), Router(cfg, laya=None, arch=None),
+                         lambda m: two, work, tmp_path)
+    asyncio.run(orch2.run("task", FakeEnvironment()))
+    assert dict((s.id, m) for s, m in seen) == {"a": cfg.tiers[-1], "b": cfg.tiers[0]}
+
+
+def test_cli_timeout_can_be_set_per_model():
+    cfg = load_config(cli_timeout_sec=180, cli_timeout_by_model={"anthropic/claude-opus-5-5": 300})
+    assert cfg.cli_timeout_for("anthropic/claude-opus-5-5") == 300 and cfg.cli_timeout_for("x") == 180
 
 
 def test_no_escalation_when_a_dependency_failed(tmp_path):

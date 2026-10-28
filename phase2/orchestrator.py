@@ -15,6 +15,7 @@ from .blackboard import Blackboard, facts_text
 from .planner import Step, load_pinned_plan, make_plan, merge_chain, plan_shape, single_step_plan, topo_order
 from .scheduler import run_dag
 from .cli_models import backend_of
+from .router import RouteDecision
 from .verifier import Verdict, read_outputs, steps_dir, verify
 
 
@@ -72,7 +73,7 @@ not work, or change a difficulty (0 easy, 1 medium, 2 hard: it picks the model).
 Reply with only JSON: {{"updates": [{{"id": "...", "goal": "...", "check": "...", "difficulty": 0}}]}}; use an empty
 list when the plan is still right."""
 
-FIXER_ACTIONS = ("rerun_dependency", "retry", "escalate", "stop")
+FIXER_ACTIONS = ("rerun_dependency", "retry", "escalate", "revise_check", "stop")
 FIXER_PROMPT = """You are the error handler for a team of coding agents. A step failed. You do NOT do the work and
 you cannot run commands: read the incident and choose ONE recovery action for the harness to carry out.
 
@@ -82,6 +83,12 @@ Reply with only one JSON object:
   it, or a value that contradicts the evidence). That step is re-run on a stronger model, then this step retries.
 - {"action": "retry", "note": "<one concrete hint>"}: the same model was close; a specific hint should fix it.
 - {"action": "escalate", "note": "<what the stronger model should know>"}: the step is too hard for this model.
+- {"action": "revise_check", "check": "<corrected shell command, or "" to drop the check>", "note": "<why the check
+  is wrong>"}: the work meets the task text but the check is wrong. The planner wrote it before seeing the data, so
+  it can assume what the task or the data contradicts (exact counts or formats it guessed, no tolerance for dirty
+  data), test something the task never asked for, or be impossible to pass. A worker made to satisfy a wrong check
+  moves away from the real goal, so prefer this over retry when that is the case. The new check is run on the
+  current work; no new attempt is made unless it fails too.
 - {"action": "stop", "note": "<why>"}: nothing the team can do will fix it."""
 
 
@@ -99,6 +106,10 @@ def parse_fix(reply: str, allowed_steps, allowed_actions=FIXER_ACTIONS) -> dict:
         if a.get("step") not in allowed_steps:
             return {"action": "escalate", "note": note, "invalid": True}
         return {"action": "rerun_dependency", "step": a["step"], "note": note}
+    if a["action"] == "revise_check":
+        if not isinstance(a.get("check"), str):
+            return {"action": "escalate", "note": note, "invalid": True}
+        return {"action": "revise_check", "check": a["check"].strip(), "note": note}
     return {"action": a["action"], "note": note}
 
 
@@ -110,7 +121,7 @@ class Orchestrator:
         self.interventions = 0
         self.reviews, self._review_lock = 0, asyncio.Lock()
         self.env_block, self.workdir, self.snapshot = "", "/app", ""
-        self.steps, self.records = {}, {}
+        self.steps, self.records, self.single_step = {}, {}, False
         self.logs_dir = logs_dir
         self.on_progress = lambda: None  # agent.py refreshes the Harbor context here
 
@@ -137,6 +148,11 @@ class Orchestrator:
             plan, plan_info = await asyncio.to_thread(
                 make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps, explore,
                 self.cfg.planner_explore)
+        self.single_step = (self.cfg.single_step_tier >= 0 and len(plan.steps) == 1 and not self.cfg.plan_from
+                            and plan_info.get("planner") != "skipped")
+        if self.single_step:  # the single-agent baseline's budget, not one planned part's
+            plan.steps[0].worker_step_limit = 2 * self.cfg.worker_step_limit
+            plan.steps[0].wall_time_sec = 2 * self.cfg.step_wall_time_sec
         shape = plan_shape(plan)
         self.trace.log("plan", steps=[s.model_dump() for s in plan.steps], order=topo_order(plan),
                        planner_model=self.cfg.planner_model, **shape, **plan_info)
@@ -339,7 +355,11 @@ class Orchestrator:
             return f"(listing failed: {e})"
 
     async def _run_step(self, step, instruction, environment, bb) -> dict:
-        decision = self.router.route(step.id, step.goal, hint=step.difficulty)
+        if self.single_step and step.id in self.steps:  # one planned step: the single-agent setup, no rating used
+            tier = min(self.cfg.single_step_tier, len(self.cfg.tiers) - 1)
+            decision = RouteDecision(tier, "single_step", router=f"one-step plan: tier {tier}, as the single agent")
+        else:
+            decision = self.router.route(step.id, step.goal, hint=step.difficulty)
         self.trace.log("route", step=step.id, model=self.cfg.tiers[decision.tier], **decision.to_dict())
         record = {"route": decision.to_dict(), "attempts": [], "escalations": 0, "passed": False,
                   "tier": decision.tier}
@@ -391,6 +411,18 @@ class Orchestrator:
                                f"Its corrected results are in the team status above.{notes}")
                     continue
                 kind = "escalate"  # the earlier step could not be fixed: fall back
+            if kind == "revise_check":
+                record["check_revised"] = True
+                old, step.check = step.check, action["check"]
+                if ACC_RUN in old and ACC_RUN not in step.check:  # the acceptance tests stay part of a final check
+                    step.check = f"( {step.check} ) && {ACC_RUN}" if step.check else ACC_RUN
+                verdict = await verify(environment, step, result.exit_status, self.cfg.check_timeout)
+                self.trace.log("check_revised", step=step.id, old=old, new=step.check, passed=verdict.passed,
+                               check_output=verdict.output[-500:], note=note[:500])
+                if verdict.passed:
+                    record["passed"] = True
+                    break
+                kind, hint = "retry", hint + f"\nThe step's check was corrected to: {step.check}"
             if kind == "retry":
                 handoff = notes + hint
                 continue
@@ -500,7 +532,15 @@ class Orchestrator:
 
     async def _triage(self, step, record, result, verdict, out_path, instruction, bb) -> dict:
         """One fresh error-handler call (no shell, no memory between calls), within the run's budget."""
-        if not self.ask_fixer or self.interventions >= self.cfg.max_interventions:
+        # The check can be revised once per step, when the worker submitted and only the check failed (not missing
+        # outputs). Two such failures make the check itself the suspect: the handler is then called even past
+        # max_interventions (2026-10-28 telecom: two easy parse steps failed their checks 3 times each, also on
+        # Opus, after the run's handler calls were used up).
+        revisable = (bool(step.check.strip()) and result.exit_status == "Submitted"
+                     and not verdict.output.startswith("missing declared outputs") and not record.get("check_revised"))
+        same_check_fails = sum(a["exit_status"] == "Submitted" and not a["passed"] for a in record["attempts"])
+        suspect = revisable and same_check_fails >= 2
+        if not self.ask_fixer or (self.interventions >= self.cfg.max_interventions and not suspect):
             return {"action": "escalate"}
         self.interventions += 1
         ran = [d for d in self._ancestors(step.id) if d in self.records]
@@ -509,8 +549,11 @@ class Orchestrator:
         allowed = [a for a in FIXER_ACTIONS if not (
             (a == "escalate" and (record["escalations"] >= self.cfg.max_escalations or
                                   record["tier"] >= len(self.cfg.tiers) - 1)) or
-            (a == "rerun_dependency" and not ran))]
-        prompt = self._incident(step, record, result, verdict, out_path, instruction, bb, ran) + \
+            (a == "rerun_dependency" and not ran) or (a == "revise_check" and not revisable))]
+        models = sorted({a["model"] for a in record["attempts"]})
+        prompt = self._incident(step, record, result, verdict, out_path, instruction, bb, ran) + (
+            f"\n\nNOTE: {same_check_fails} attempts ({', '.join(models)}) submitted this step as done and every one "
+            f"failed the same check. Suspect the check before the workers." if suspect else "") + \
             f"\n\nAVAILABLE ACTIONS NOW: {', '.join(allowed)}"
         try:
             reply = await asyncio.to_thread(self.ask_fixer, [{"role": "user", "content": prompt}])

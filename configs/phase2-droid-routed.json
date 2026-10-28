@@ -43,5 +43,9 @@
   "planner_explore": 8,
   "lead_reviews": 2,
   "best_of_models": [],
-  "planner_top_tier": true
+  "planner_top_tier": true,
+  "single_step_tier": 1,
+  "cli_timeout_by_model": {
+    "droid/claude-opus-5-5": 300
+  }
 }

@@ -46,5 +46,9 @@
     "droid/claude-sonnet-5-5",
     "droid/claude-opus-5-5"
   ],
-  "planner_top_tier": true
+  "planner_top_tier": true,
+  "single_step_tier": 1,
+  "cli_timeout_by_model": {
+    "droid/claude-opus-5-5": 300
+  }
 }

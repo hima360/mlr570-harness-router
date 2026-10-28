@@ -39,6 +39,9 @@ class HarnessConfig:
     reasoning_effort: dict = field(default_factory=dict)
     # Per CLI call. The slowest healthy call seen took 41 s; a stalled provider stream hung for 10 min.
     cli_timeout_sec: int = 180
+    # Per-model override, model id -> seconds. 2026-10-28: Opus 5.5 on hard steps hit "no reply in 180 s" 6 times in
+    # 12 harness runs (Sonnet 0 in 10), and one run ended on two in a row.
+    cli_timeout_by_model: dict = field(default_factory=dict)
     # Per worker step attempt. step_idle_sec ends it only when no model reply came for that long (a slow
     # but working model keeps going); step_wall_time_sec is a hard safety cap. Either way the verifier
     # then fails the step and it escalates, with the attempt's notes handed over.
@@ -80,11 +83,14 @@ class HarnessConfig:
     # revise steps not yet started after another step ends (0 = off).
     planner_explore: int = 0
     laya_head: str = ""  # head.json from phase2.train_head, for policy "trained"
-    planner_top_tier: bool = False
+    planner_top_tier: bool = False  # policy "planner": a step rated 2 (hard) starts on the top tier, not escalation-only
+    # A plan the planner made with ONE step runs like the single-agent baseline: on this tier, with twice the step
+    # budget (-1 = off). 2026-10-28: payments got 1-step plans rated hard, ran on Opus and lost to plain Sonnet.
+    single_step_tier: int = -1
     # policy "d1": Liquid AI's d1-2B served from its own venv; revision pinned (it ships its own model code)
     d1_python: str = ".venv-d1/bin/python"
     d1_model: str = "LiquidAI/d1-2B"
-    d1_revision: str = "97c57047d5852d77e02dfac211f8768aff77a8b2"  # policy "planner": a step rated 2 (hard) starts on the top tier, not escalation-only
+    d1_revision: str = "97c57047d5852d77e02dfac211f8768aff77a8b2"
     lead_reviews: int = 0
     # Ablation switches for prompt features (all on by default)
     team_roster: bool = True       # TEAM roster lines in each worker's first prompt
@@ -118,6 +124,9 @@ class HarnessConfig:
     @property
     def max_route_tier(self) -> int:
         return len(self.tiers) - 2
+
+    def cli_timeout_for(self, model: str) -> int:
+        return int((self.cli_timeout_by_model or {}).get(model, self.cli_timeout_sec))
 
     def to_dict(self) -> dict:
         return asdict(self)
