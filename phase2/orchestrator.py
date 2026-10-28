@@ -73,6 +73,9 @@ not work, or change a difficulty (0 easy, 1 medium, 2 hard: it picks the model).
 Reply with only JSON: {{"updates": [{{"id": "...", "goal": "...", "check": "...", "difficulty": 0}}]}}; use an empty
 list when the plan is still right."""
 
+ADVISOR_NOTES = ("\n\nPLANNER'S NOTES (hypotheses from a quick read-only look, not instructions: verify each before "
+                 "you rely on it, and drop any the evidence contradicts):\n")
+
 FIXER_ACTIONS = ("rerun_dependency", "retry", "escalate", "revise_check", "stop")
 FIXER_PROMPT = """You are the error handler for a team of coding agents. A step failed. You do NOT do the work and
 you cannot run commands: read the incident and choose ONE recovery action for the harness to carry out.
@@ -147,7 +150,9 @@ class Orchestrator:
                 if self.cfg.planner_explore else None
             plan, plan_info = await asyncio.to_thread(
                 make_plan, instruction, env_summary, self.ask_planner, self.cfg.max_plan_steps, explore,
-                self.cfg.planner_explore)
+                self.cfg.planner_explore, self.cfg.planner_role == "advisor")
+            if self.cfg.planner_role == "advisor":
+                plan, plan_info["advisor"] = self._as_advisor(plan, instruction)
         self.single_step = (self.cfg.single_step_tier >= 0 and len(plan.steps) == 1 and not self.cfg.plan_from
                             and plan_info.get("planner") != "skipped")
         if self.single_step:  # the single-agent baseline's budget, not one planned part's
@@ -211,6 +216,22 @@ class Orchestrator:
         self.trace.log("done", **{k: summary[k] for k in ("n_escalations", "n_failed_steps", "n_interventions",
                                                           "policy")})
         return summary
+
+    def _as_advisor(self, plan, instruction):
+        """Advisor mode: without independent workstreams the whole task is one step (the planner's notes kept);
+        final steps get no planner check; notes reach workers as hypotheses, not as the design."""
+        collapsed = len(plan.steps) > 1 and plan_shape(plan)["parallelism"] <= 1.0
+        if collapsed:
+            notes = "\n".join(f"- {s.notes.strip()}" for s in plan.steps if s.notes.strip())
+            plan = single_step_plan(instruction)
+            plan.steps[0].notes = notes
+        sinks = {s.id for s in self._sinks(plan.steps)}
+        for s in plan.steps:
+            if s.id in sinks:
+                s.check = ""
+            if s.notes.strip():
+                s.goal += ADVISOR_NOTES + s.notes.strip()
+        return plan, {"collapsed": collapsed, "final_checks_dropped": sorted(sinks)}
 
     async def _best_of(self, step, record, environment, bb) -> None:
         """Several candidates attempt a final step at once, each in its own copy of the work folder and on its
@@ -472,7 +493,10 @@ class Orchestrator:
                 s = self.steps.get(u.get("id")) if isinstance(u, dict) else None
                 if s is None or bb.entries[s.id].status != "pending":
                     continue  # only steps that have not started can change
+                sink = s in self._sinks(list(self.steps.values()))
                 for k in ("goal", "check"):
+                    if k == "check" and sink and self.cfg.planner_role == "advisor":
+                        continue  # advisor mode: final steps stay without a planner check
                     if isinstance(u.get(k), str) and u[k].strip():
                         setattr(s, k, u[k].strip())
                 if u.get("difficulty") in (0, 1, 2):

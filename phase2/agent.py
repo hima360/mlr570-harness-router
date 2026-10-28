@@ -31,7 +31,7 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "reviewer_model", "team_roster", "recency_reminder", "output_guard", "env_bootstrap",
                "acceptance_model", "acceptance_step_limit", "best_of_models",
                "planner_explore", "lead_reviews", "laya_head", "planner_top_tier",
-               "d1_python", "d1_model", "d1_revision", "single_step_tier")
+               "d1_python", "d1_model", "d1_revision", "single_step_tier", "planner_role")
 
 
 class RoutedHarness(BaseAgent):

@@ -91,6 +91,7 @@ class Step(BaseModel):
     writes: list[str] = []
     outputs: list[Output] = []
     check: str = ""
+    notes: str = ""  # advisor mode: what the planner saw and suspects, shown to the worker as hypotheses
     effort: str = ""  # "low": the worker runs at low reasoning effort (assembling known results)
     continues: str = ""  # a step in depends_on whose CLI session this step forks (keeps its working memory)
     difficulty: int | None = Field(default=None, ge=0, le=2)  # the planner's rating; policy "planner" routes on it
@@ -109,7 +110,7 @@ class PlanError(ValueError):
     pass
 
 
-def parse_plan(text: str, max_steps: int) -> Plan:
+def parse_plan(text: str, max_steps: int, require_checks: bool = True) -> Plan:
     """Parse and validate planner output: JSON shape, unique ids, known deps, no cycles."""
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
@@ -136,7 +137,7 @@ def parse_plan(text: str, max_steps: int) -> Plan:
         if nopath:
             raise PlanError(f"step {s.id} file outputs need a path: {nopath}")
     topo_order(plan)
-    for s in plan.steps:  # Droid: "exit 0 means finished, not succeeded"; never trust the worker's word
+    for s in plan.steps if require_checks else []:  # Droid: "exit 0 means finished, not succeeded"; never trust the worker's word
         if not s.check.strip():
             raise PlanError(f"step {s.id} has no check: give it a shell command that fails on a wrong result")
     return plan
@@ -201,6 +202,25 @@ def merge_chain(plan: Plan, step_limit: int, wall_time_sec: int, max_steps: int 
     return Plan(steps=[merged])
 
 
+# 2026-10-28 (ev3): an authoring planner lost to a lone Sonnet agent. It prescribed a design from a quick look
+# (payments: "suggested approach: a compacted Kafka state topic") and graded steps with the worker's own claims
+# (outputs.txt latency_ok=yes); workers built its design, passed its check and stopped. As advisor it says what
+# must be true, and its ideas reach workers as hypotheses to verify.
+ADVISOR_PROMPT = """
+
+ADVISOR MODE: these rules override the ones above where they differ. You advise; the workers own the design.
+- goal: what must be true when the step is done (the outcome, the files, the task's constraints), not how to get
+  there. Do not prescribe an approach or a design.
+- notes: optional, per step. What you saw while exploring and any approach you suspect, written as hypotheses
+  ("it looks like ...", "worth checking ..."). Workers are told to verify them before relying on them.
+- Split only into independent workstreams that can run at the same time. With fewer than two, return ONE step
+  whose goal is the whole task.
+- check: only for a step whose result a later step consumes: a command that confirms the handed-over artifact
+  exists and has the agreed shape (file, columns, interface). Never grade a step with what the worker writes about
+  its own work (such as ok=yes in outputs.txt), and never assert counts or thresholds you have not measured. Final
+  steps get check "": the harness relies on the task's own tests and the workers' testing."""
+
+
 def single_step_plan(instruction: str) -> Plan:
     return Plan(steps=[Step(id="s1", goal=instruction, writes=["**"])])
 
@@ -228,10 +248,12 @@ def load_pinned_plan(path, max_steps: int) -> Plan:
 
 
 def make_plan(instruction: str, env_summary: str, ask, max_steps: int, explore=None,
-              max_explore: int = 8) -> tuple[Plan, dict]:
+              max_explore: int = 8, advisor: bool = False) -> tuple[Plan, dict]:
     """`ask(messages) -> str` is the model call. With `explore(command) -> output`, the planner first looks
     around with up to `max_explore` read-only commands. One repair attempt, then a single-step fallback."""
     prompt = PLANNER_PROMPT.format(max_steps=max_steps, instruction=instruction, env_summary=env_summary[:4000])
+    if advisor:
+        prompt += ADVISOR_PROMPT
     if explore:
         prompt += EXPLORE_PROMPT.format(n=max_explore)
     messages = [{"role": "user", "content": prompt}]
@@ -259,7 +281,7 @@ def make_plan(instruction: str, env_summary: str, ask, max_steps: int, explore=N
                 break
             continue
         try:
-            return parse_plan(reply, max_steps), info
+            return parse_plan(reply, max_steps, require_checks=not advisor), info
         except PlanError as e:
             info["errors"].append(str(e))
             repairs += 1

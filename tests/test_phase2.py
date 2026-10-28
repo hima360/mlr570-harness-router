@@ -1000,3 +1000,45 @@ def test_d1_policy_routes_on_the_decision_models_expected_level():
     easy, hard = r.route("s1", "write up the results"), r.route("s2", "reverse engineer the vm")
     assert (easy.tier, easy.source) == (0, "d1") and hard.tier == cfg.max_route_tier and hard.confidence == 0.9
 
+
+
+def test_advisor_planner_collapses_a_chain_and_drops_final_checks(tmp_path):
+    cfg = load_config(policy="planner", planner_role="advisor", single_step_tier=1)
+    prompts, seen = [], []
+
+    def ask(messages):
+        prompts.append(messages[0]["content"])
+        return json.dumps({"steps": [
+            {"id": "a", "goal": "find it", "check": "", "notes": "it looks like a cache bug"},
+            {"id": "b", "goal": "fix it", "depends_on": ["a"], "check": "grep -q ok=yes /tmp/steps/b/outputs.txt"}]})
+
+    def work(step, model_id, *a):
+        seen.append((step, model_id))
+        return WorkerResult("Submitted", "", 1)
+
+    trace = Trace(None)
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), trace, Router(cfg, laya=None, arch=None), ask, work, tmp_path)
+    summary = asyncio.run(orch.run("the whole task", FakeEnvironment()))
+    assert "ADVISOR MODE" in prompts[0] and summary["steps"]["s1"]["passed"]
+    step, model = seen[0]
+    assert len(seen) == 1 and step.check == "" and model == cfg.tiers[1]
+    assert step.goal.startswith("the whole task") and "PLANNER'S NOTES" in step.goal and "cache bug" in step.goal
+    assert next(e for e in trace.events if e["event"] == "plan")["advisor"]["collapsed"]
+
+
+def test_advisor_planner_keeps_parallel_work_and_handoff_checks(tmp_path):
+    cfg = load_config(policy="fixed:0", planner_role="advisor")
+    seen = []
+
+    def work(step, model_id, *a):
+        seen.append(step)
+        return WorkerResult("Submitted", "", 1)
+
+    plan = json.dumps({"steps": [{"id": "a", "goal": "x", "check": "test -s /app/a.csv"},
+                                 {"id": "b", "goal": "y", "check": "test -s /app/b.csv"},
+                                 {"id": "c", "goal": "z", "depends_on": ["a", "b"], "check": "guess-count"}]})
+    orch = Orchestrator(cfg, Ledger(cfg.prices_per_million), Trace(None), Router(cfg, laya=None, arch=None),
+                        lambda m: plan, work, tmp_path)
+    asyncio.run(orch.run("task", FakeEnvironment()))
+    checks = {s.id: s.check for s in seen}
+    assert checks == {"a": "test -s /app/a.csv", "b": "test -s /app/b.csv", "c": ""}

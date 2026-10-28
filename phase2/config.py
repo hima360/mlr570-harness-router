@@ -87,6 +87,9 @@ class HarnessConfig:
     # A plan the planner made with ONE step runs like the single-agent baseline: on this tier, with twice the step
     # budget (-1 = off). 2026-10-28: payments got 1-step plans rated hard, ran on Opus and lost to plain Sonnet.
     single_step_tier: int = -1
+    # "author": the planner's goals and checks bind the workers. "advisor": it says what must be true, its ideas go to
+    # workers as hypotheses, final steps get no planner check, and a plan without parallel work becomes one step.
+    planner_role: str = "author"
     # policy "d1": Liquid AI's d1-2B served from its own venv; revision pinned (it ships its own model code)
     d1_python: str = ".venv-d1/bin/python"
     d1_model: str = "LiquidAI/d1-2B"
