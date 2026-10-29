@@ -155,13 +155,19 @@ RETRY_NOTE = ("Your previous reply took too long and was discarded; none of it w
               "shorter: keep your reasoning brief and give only what was asked.")
 
 
-def run_cli(call, cli: str, attempts: int = 2, model: str | None = None, retry_call=None) -> dict:
+CONNECTION_WAIT_SEC = 600  # how long a lost network connection may stall a call before it counts as a failure
+
+
+def run_cli(call, cli: str, attempts: int = 2, model: str | None = None, retry_call=None,
+            sleep=time.sleep) -> dict:
     """call() -> CompletedProcess. Retries once on a timeout (a provider stream that stalled); a second
     timeout raises ModelTimedOut, which ends the step attempt. Also retries once on a quick zero-turn
-    failure. A slow zero-turn failure (provider unreachable) raises ProviderUnavailable at once. Every
-    failed attempt is reported to the thread's failure sink."""
-    timed_out = False
-    for i in range(attempts):
+    failure. A slow zero-turn failure (provider unreachable) raises ProviderUnavailable at once. A lost
+    connection ("Connection error", no turns run) waits and retries for up to CONNECTION_WAIT_SEC without using
+    an attempt: 2026-10-29, a Wi-Fi switch ended over half of a 48-run evaluation's runs early. Every failed
+    attempt is reported to the thread's failure sink."""
+    timed_out, waited, i = False, 0.0, 0
+    while i < attempts:
         t0 = time.perf_counter()
         try:
             # After a timeout, the retry tells the model why (Terminus: "NONE of the actions... were
@@ -175,12 +181,20 @@ def run_cli(call, cli: str, attempts: int = 2, model: str | None = None, retry_c
                     will_retry=not last)
             if last:
                 raise ModelTimedOut(f"{cli} timed out after {e.timeout:.0f} s, {attempts} times in a row") from e
+            i += 1
             continue
         try:
             return parse_result(proc, cli)
         except RuntimeError as e:
             ran = (_last_result(proc.stdout) or {}).get("num_turns") or 0
             ms = (time.perf_counter() - t0) * 1e3
+            if not ran and "connection error" in str(e).lower() and waited < CONNECTION_WAIT_SEC:
+                pause = min(30.0 * 2 ** min(int(waited // 30), 2), CONNECTION_WAIT_SEC - waited)
+                _report(cli=cli, model=model, attempt=i + 1, kind="connection", ms=round(ms),
+                        error=f"{str(e)[-200:]} (waiting {pause:.0f} s for the network)", will_retry=True)
+                sleep(pause)
+                waited += pause
+                continue
             # A quick zero-turn failure (transient "Invalid model" catalog blip) is cheap to retry once;
             # a slow one is the provider being unreachable (~80 s each) and fails fast.
             retry = not ran and ms < QUICK_FAIL_MS and i < attempts - 1
@@ -190,11 +204,13 @@ def run_cli(call, cli: str, attempts: int = 2, model: str | None = None, retry_c
             _report(cli=cli, model=model, attempt=i + 1, kind=kind, ms=round(ms), error=str(e)[-300:],
                     will_retry=retry)
             if retry:
-                time.sleep(RETRY_WAIT_SEC)
+                sleep(RETRY_WAIT_SEC)
+                i += 1
                 continue
             if ran:
                 raise
             raise ProviderUnavailable(str(e)) from e
+    raise ModelTimedOut(f"{cli}: no attempts left")
 
 def openai_usage(u: dict, **extra) -> dict:
     """Anthropic-style usage -> OpenAI-style. prompt_tokens includes cache reads and cache writes."""

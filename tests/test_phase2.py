@@ -1338,3 +1338,20 @@ def test_v25_worker_must_measure_targets_and_reviewer_must_cite_evidence():
     asyncio.run(main(load_config(measure_targets=True)))
     asyncio.run(main(load_config()))
     assert "MEASURE WHAT THE TASK PROMISES" in goals[0] and "MEASURE WHAT THE TASK PROMISES" not in goals[1]
+
+
+def test_cli_waits_out_a_lost_connection_without_using_an_attempt():
+    import subprocess
+
+    from phase2.cli_models import ProviderUnavailable, run_cli
+
+    fail = json.dumps({"type": "result", "is_error": True, "num_turns": 0, "result": "Connection error."})
+    ok = json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": "hi"})
+    outs, slept = iter([fail, fail, fail, ok]), []
+    res = run_cli(lambda: subprocess.CompletedProcess([], 1, next(outs), ""), "droid exec", sleep=slept.append)
+    assert res["result"] == "hi" and slept == [30.0, 60.0, 120.0]
+    # past the wait budget it fails as before
+    slept.clear()
+    with pytest.raises(ProviderUnavailable):
+        run_cli(lambda: subprocess.CompletedProcess([], 1, fail, ""), "droid exec", sleep=slept.append)
+    assert 600 <= sum(slept) <= 605  # the wait budget, then the one quick retry as before
