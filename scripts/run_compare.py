@@ -43,6 +43,10 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "review": ("fixed:1", BASE, "configs/phase2-droid-review.json"),
     # v2.5: v2 plus measure-the-targets (worker) and evidence-backed review (reviewer).
     "review25": ("fixed:1", BASE, "configs/phase2-droid-review25.json"),
+    # The same three with GLM-5.3 Flash as the builder (Factory dropped Sonnet 5.5 on 2026-10-29); Opus reviews.
+    "glm": ("fixed:1", BASE, "configs/phase2-droid-glm.json"),
+    "glmreview": ("fixed:1", BASE, "configs/phase2-droid-glm-review.json"),
+    "glmreview25": ("fixed:1", BASE, "configs/phase2-droid-glm-review25.json"),
 }
 
 

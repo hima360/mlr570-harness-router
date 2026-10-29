@@ -1,0 +1,52 @@
+{
+  "tiers": [
+    "droid/glm-5.3-flash",
+    "droid/glm-5.3-flash",
+    "droid/claude-opus-5-5"
+  ],
+  "planner_model": "droid/claude-opus-5-5",
+  "fixer_model": "droid/claude-opus-5-5",
+  "policy": "planner",
+  "confidence_threshold": 0.35,
+  "base_url": "http://127.0.0.1:10100/v1",
+  "api_key": "local",
+  "prices_per_million": {},
+  "max_plan_steps": 8,
+  "max_parallel": 3,
+  "worker_step_limit": 40,
+  "worker_command_timeout": 180,
+  "check_timeout": 300,
+  "random_seed": 570,
+  "factory_credit": {
+    "usd": null,
+    "source": "https://docs.factory.com/pricing/individuals.md ; https://docs.factory.com/models.md ; https://factory.com/pricing",
+    "checked": "2026-10-22",
+    "note": "Factory does not publish a USD value for one Factory Standard Credit (pricing page, plan pages, models page and Analytics API reference checked 2026-10-22). Droid cost_usd therefore stays 0 and factory_credits are reported per model. Measured: credits ~= input tokens x model multiplier (glm-5.3-flash 7314 tok -> 465 credits; gpt-6-sol 8336 tok -> 6689 credits). gpt-6-luna (81 credits / 1550 tok) and gpt-6.1-sol (2981 credits / 2961 tok) multipliers measured from one probe each on 2026-10-25. claude/ models are priced at Anthropic list price (prices_per_million), so a run's cost mixes USD and Factory credits.",
+    "multipliers": {
+      "droid/glm-5.3-flash": 0.06,
+      "droid/gpt-6-luna": 0.05,
+      "droid/gpt-6.1-sol": 1.0
+    }
+  },
+  "reasoning_effort": {
+    "droid/claude-haiku-5-5": "medium",
+    "droid/claude-sonnet-5-5": "medium",
+    "droid/claude-opus-5-5": "medium",
+    "droid/gpt-6-luna": "low",
+    "droid/gpt-6.1-sol": "medium"
+  },
+  "prices_source": "Billed in Factory Standard Credits through droid exec (Hima's Factory subscription), not the Claude subscription. Same three Claude 5.5 models as phase2-claude-ladder.json. No USD rate per credit is published, so cost_usd stays 0 and credits are reported. Base config for single-model baselines: phase2-droid-routed.json without the value reviewer, so baselines and v2/v2.5 differ only by the senior review (2026-10-29). GLM config: tier 1 (the builder) is GLM-5.3 Flash through Droid, because Factory dropped claude-sonnet-5-5 from its catalog on 2026-10-29; Opus stays the top tier and the reviewer.",
+  "merge_chains": true,
+  "max_run_credits": 1500000,
+  "reviewer_model": "",
+  "acceptance_model": "",
+  "planner_explore": 8,
+  "lead_reviews": 2,
+  "best_of_models": [],
+  "planner_top_tier": true,
+  "single_step_tier": 1,
+  "cli_timeout_by_model": {
+    "droid/claude-opus-5-5": 300
+  },
+  "planner_role": "advisor"
+}
