@@ -92,6 +92,8 @@ def tests_fraction(trial: str) -> float | None:
 
 
 def summary(prefix: str) -> None:
+    from phase2.list_prices import trace_usd
+
     rows, agg = [], collections.defaultdict(lambda: collections.Counter())
     for d in sorted(glob.glob(f"{ROOT}/jobs/{prefix}-*/")):  # pathlib would drop the trailing slash
         if not os.path.isdir(d):
@@ -107,13 +109,14 @@ def summary(prefix: str) -> None:
         reward = ((r.get("verifier_result") or {}).get("rewards") or {}).get("reward")
         ev = [json.loads(l) for l in open(t + "agent/trace.jsonl")] if os.path.exists(t + "agent/trace.jsonl") else []
         credits = sum(e.get("factory_credits") or 0 for e in ev if e["event"] == "llm_call")
+        list_usd = trace_usd(ev)  # API list price of the same tokens (phase2.list_prices)
         frac, mins = tests_fraction(t), (ev[-1]["t"] / 60 if ev else 0)
         models = ",".join(sorted({e["model"].split("/")[-1] for e in ev if e["event"] in ("attempt", "helper_end")}))
         rows.append((task, setup, f"reward={reward} tests={'-' if frac is None else f'{frac:.2f}'} "
-                                  f"${ar.get('cost_usd') or 0:.2f} {credits:,.0f}cr {mins:.0f}min {models} {exc or ''}"))
+                                  f"${list_usd:.2f} {credits:,.0f}cr {mins:.0f}min {models} {exc or ''}"))
         a = agg[setup]
         a["runs"] += 1; a["valid"] += exc is None; a["passed"] += reward == 1.0
-        a["usd"] += ar.get("cost_usd") or 0; a["credits"] += credits; a["minutes"] += mins
+        a["usd"] += list_usd; a["credits"] += credits; a["minutes"] += mins
         a["frac"] += frac or 0
     for row in rows:
         print(f"{row[0]:28s} {row[1]:7s} {row[2]}")

@@ -1355,3 +1355,14 @@ def test_cli_waits_out_a_lost_connection_without_using_an_attempt():
     with pytest.raises(ProviderUnavailable):
         run_cli(lambda: subprocess.CompletedProcess([], 1, fail, ""), "droid exec", sleep=slept.append)
     assert 600 <= sum(slept) <= 605  # the wait budget, then the one quick retry as before
+
+
+def test_list_price_of_a_call():
+    from phase2.list_prices import call_usd, trace_usd
+
+    # Opus: 1M fresh input at the $5 cache-write rate, 1M cache reads at $0.20, 1M output at $20
+    assert call_usd("droid/claude-opus-5-5", 2_000_000, 1_000_000, 1_000_000) == pytest.approx(25.20)
+    assert call_usd("droid/glm-5.3-flash", 1_000_000, 0, 1_000_000) == pytest.approx(0.65)
+    assert call_usd("droid/unknown-model", 10, 0, 10) is None
+    assert trace_usd([{"event": "llm_call", "model": "droid/glm-5.3-flash", "input_tokens": 2_000_000,
+                       "cached_tokens": 1_000_000, "output_tokens": 0}, {"event": "plan"}]) == pytest.approx(0.18)
