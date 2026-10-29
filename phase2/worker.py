@@ -97,7 +97,7 @@ class SubmitGate:
             # reviewer sent payments back three times on note-keeping and the senior review never ran).
             if self.senior and self.senior_left > 0:
                 self.senior_left -= 1
-                report = ((done.args[0] if done.args else {}) or {}).get("content", "")
+                report = ((done.messages[0] if done.messages else {}) or {}).get("content", "")
                 problem = self.senior(self.step, report)
                 if problem:
                     return {"output": f"NOT DONE YET: {problem}\nFix them, then submit again.", "returncode": 1,
