@@ -110,13 +110,14 @@ def summary(prefix: str) -> None:
         ev = [json.loads(l) for l in open(t + "agent/trace.jsonl")] if os.path.exists(t + "agent/trace.jsonl") else []
         credits = sum(e.get("factory_credits") or 0 for e in ev if e["event"] == "llm_call")
         list_usd = trace_usd(ev)  # API list price of the same tokens (phase2.list_prices)
+        tokens = sum((e.get("input_tokens") or 0) + (e.get("output_tokens") or 0) for e in ev if e["event"] == "llm_call")
         frac, mins = tests_fraction(t), (ev[-1]["t"] / 60 if ev else 0)
         models = ",".join(sorted({e["model"].split("/")[-1] for e in ev if e["event"] in ("attempt", "helper_end")}))
         rows.append((task, setup, f"reward={reward} tests={'-' if frac is None else f'{frac:.2f}'} "
-                                  f"${list_usd:.2f} {credits:,.0f}cr {mins:.0f}min {models} {exc or ''}"))
+                                  f"${list_usd:.2f} {tokens / 1e6:.2f}Mtok {credits:,.0f}cr {mins:.0f}min {models} {exc or ''}"))
         a = agg[setup]
         a["runs"] += 1; a["valid"] += exc is None; a["passed"] += reward == 1.0
-        a["usd"] += list_usd; a["credits"] += credits; a["minutes"] += mins
+        a["usd"] += list_usd; a["credits"] += credits; a["minutes"] += mins; a["tokens"] += tokens
         a["frac"] += frac or 0
     for row in rows:
         print(f"{row[0]:28s} {row[1]:7s} {row[2]}")
@@ -124,7 +125,7 @@ def summary(prefix: str) -> None:
     for s, a in agg.items():
         per = lambda k: a[k] / a["passed"] if a["passed"] else float("nan")
         print(f"{s:7s} runs={a['runs']} valid={a['valid']} passed={a['passed']} mean_tests={a["frac"] / max(a["valid"], 1):.2f} "
-              f"usd={a['usd']:.2f} credits={a['credits']:,.0f} minutes={a['minutes']:.0f} "
+              f"usd={a['usd']:.2f} tokens={a['tokens'] / 1e6:.2f}M credits={a['credits']:,.0f} minutes={a['minutes']:.0f} "
               f"credits/solve={per('credits'):,.0f} usd/solve={per('usd'):.2f}")
 
 
