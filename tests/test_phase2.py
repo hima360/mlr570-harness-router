@@ -1366,3 +1366,32 @@ def test_list_price_of_a_call():
     assert call_usd("droid/unknown-model", 10, 0, 10) is None
     assert trace_usd([{"event": "llm_call", "model": "droid/glm-5.3-flash", "input_tokens": 2_000_000,
                        "cached_tokens": 1_000_000, "output_tokens": 0}, {"event": "plan"}]) == pytest.approx(0.18)
+
+
+def test_supervisor_reruns_only_runs_ended_by_infrastructure(tmp_path):
+    import sys
+
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import supervise
+
+    def job(name, result, events):
+        trial = tmp_path / name / "t__x"
+        (trial / "agent").mkdir(parents=True)
+        (trial / "result.json").write_text(json.dumps(result))
+        (trial / "agent" / "trace.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+        return tmp_path / name
+
+    call = {"event": "llm_call", "model": "droid/glm-5.3-flash"}
+    killed = job("a", {"exception_info": {"exception_type": "RuntimeError"}, "verifier_result": None}, [])
+    lost = job("b", {"verifier_result": {"rewards": {"reward": 0}}},
+               [call, {"event": "attempt", "exit_status": "ProviderUnavailable"}])
+    honest = job("c", {"verifier_result": {"rewards": {"reward": 0}}},
+                 [call, {"event": "attempt", "exit_status": "Submitted"}])
+    limit = job("d", {"verifier_result": {"rewards": {"reward": 0}}},
+                [call, {"event": "attempt", "exit_status": "LimitsExceeded"}])
+    assert supervise.infra_reason(killed).startswith("killed at start")
+    assert supervise.infra_reason(lost) == "ended by ProviderUnavailable"
+    assert supervise.infra_reason(honest) == "" and supervise.infra_reason(limit) == ""
+    assert supervise.unfinished(tmp_path / "nothing-here")
