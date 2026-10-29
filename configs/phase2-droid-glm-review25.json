@@ -46,7 +46,8 @@
   "planner_top_tier": true,
   "single_step_tier": 1,
   "cli_timeout_by_model": {
-    "droid/claude-opus-5-5": 300
+    "droid/claude-opus-5-5": 300,
+    "droid/glm-5.3-flash": 600
   },
   "planner_role": "advisor",
   "senior_reviewer_model": "droid/claude-opus-5-5",
