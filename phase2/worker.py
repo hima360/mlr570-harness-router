@@ -330,7 +330,8 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     if cfg.reviewer_model and model_id != cfg.reviewer_model:
         gate.reviewer = lambda s: review_values(cfg, ledger, s, env_adapter, agent.messages, on_call)
     if senior is not None and model_id != cfg.senior_reviewer_model:  # `senior(step, report, messages)`
-        gate.senior, gate.senior_left = (lambda s, report: senior(s, report, agent.messages)), cfg.senior_review_rounds
+        gate.senior = lambda s, report: senior(s, report, agent.messages)
+        gate.senior_left = cfg.senior_review_rounds + (1 if cfg.senior_verify else 0)  # + the second look
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,
                          blackboard=blackboard_text, writes_hint=writes_hint,

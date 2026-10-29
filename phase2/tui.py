@@ -111,10 +111,16 @@ def activity_lines(events: list[dict]) -> list[Text]:
         elif ev == "delegate":
             out.append(_line(t, "LEAD", e.get("step", "?"), f"→ {e.get('helper')} ({e.get('to') or 'router'}: "
                              f"{e.get('model')}): {_short(e.get('task'), 110)}"))
+        elif ev == "senior_fix":
+            out.append(_line(t, "REVIEWER", e.get("model", "?"), f"{e.get('step')}  " + (
+                f"fixing {len(e.get('problems') or [])} problem(s) still open" if e.get("phase") == "start"
+                else f"fix ended: {e.get('exit_status')} after {e.get('n_calls')} calls")))
         elif ev == "senior_review":
             probs = e.get("problems") or []
+            v = e.get("verdict")
             what = (f"sent it back: {len(probs)} problem(s): " + "; ".join(_short(p.get("what"), 60) for p in probs[:2])
-                    if e.get("verdict") == "fix" else "ship it" if e.get("verdict") else f"review failed: {e.get('error')}")
+                    if v == "fix" else f"second look: {len(probs)} still open" if v == "open"
+                    else "second look: all fixed" if v == "fixed" else "ship it" if v else f"review failed: {e.get('error')}")
             out.append(_line(t, "REVIEWER", e.get("model", "?"), f"{e.get('step')}  read the diff "
                              f"({e.get('diff_chars', 0)} chars), ran {e.get('explored', 0)} command(s) → {what}"))
         elif ev == "helper_end":
@@ -440,8 +446,11 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
         for r in (e for e in events if e.get("event") == "senior_review" and e.get("step") == sid):
             probs = r.get("problems") or []
             out.append(head("REVIEWER", pretty_model(r.get("model", "")), "read the task, the transcript and the diff"))
-            out.append(Text("      → ship it" if r.get("verdict") == "ship" else
-                            f"      → sent back {len(probs)} problem(s)", style="green" if r.get("verdict") == "ship" else "yellow"))
+            v = r.get("verdict")
+            out.append(Text("      → ship it" if v == "ship" else "      → second look: all fixed" if v == "fixed"
+                            else f"      → second look: {len(probs)} still open" if v == "open"
+                            else f"      → sent back {len(probs)} problem(s)",
+                            style="green" if v in ("ship", "fixed") else "yellow"))
             for p in probs:
                 out.append(Text(f"        • {_short(p.get('what'), 160)}", style="yellow"))
         for h in helper_states(events, sid):
@@ -790,6 +799,11 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                     text.append(f" (worker stopped: {EXIT_REASON.get(a['exit_status'], a['exit_status'])})", style="dim")
                 children.append((f"{sid}/a{n}/check", text, []))
         children += [helper_node(sid, h, workers) for h in helpers]  # handed out but not yet in the lead's file
+        children += [review_node(f"{sid}/rv{i}", r) for i, r in enumerate(reviews)]  # second looks
+        for i, f in enumerate(e for e in events if e.get("event") == "senior_fix" and e.get("step") == sid
+                              and e.get("phase") == "end"):
+            children.append((f"{sid}/fix{i}", Text.assemble(("Senior fix: ", "bold magenta"), (pretty_model(f.get("model", "")), "bold"),
+                             f" fixed what was still open ({f.get('n_calls')} calls, {f.get('exit_status')})"), []))
         if esc and not any(k == f"{sid}/esc" for k, _, _ in children):
             children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold yellow"), "to ",
                                                          (pretty_model(esc_model) or "the next tier", "bold")), []))
@@ -813,6 +827,9 @@ def review_node(key: str, r: dict) -> tuple:
     if r.get("verdict") == "fix":
         head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"),
                              f" read the task, the transcript and the diff, and sent the work back with {len(probs)} problem(s)")
+    elif r.get("verdict") in ("open", "fixed"):
+        head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"), " second look after the fix: "
+                             + (f"{len(probs)} still open" if probs else "all fixed"))
     else:
         head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"), " approved the work")
     return (key, head, [(f"{key}/p{i}", Text(_short(p.get("what"), 150), style="yellow"), [])

@@ -99,6 +99,11 @@ class HarnessConfig:
     senior_reviewer_model: str = ""
     senior_review_rounds: int = 1
     senior_review_explore: int = 4
+    # After the worker's fix, a second look at only the raised problems; any still open go to senior_fix_model
+    # ("" = the reviewer's model) for one attempt of at most senior_fix_step_limit turns.
+    senior_verify: bool = True
+    senior_fix_model: str = ""
+    senior_fix_step_limit: int = 25
     helper_policy: str = "laya"
     helper_step_limit: int = 30
     max_delegations: int = 12

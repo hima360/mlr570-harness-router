@@ -22,20 +22,28 @@ def record_call(ledger, model: str, usage, ms: float, reply: str) -> dict:
 PLANNER_RETRY_WAIT_SEC = 5.0
 
 
-def chat(cfg, ledger, model: str, messages: list[dict], on_call=None, **kwargs) -> str:
+def chat(cfg, ledger, model: str, messages: list[dict], on_call=None, session=None, **kwargs) -> str:
     """One blocking chat call; records usage on the ledger and returns the reply text.
-    `on_call(info)` gets the call record (model, ms, tokens, cost, reply snippet)."""
+    `on_call(info)` gets the call record (model, ms, tokens, cost, reply snippet). With a `CliSession` (CLI models
+    only), a conversation's later calls resume that session and send only the turns it has not seen, so the
+    provider caches the rest (2026-10-29: uncached review calls were 41% of v2's credits)."""
     from .cli_models import ProviderUnavailable, complete_fn_for
 
     t0 = time.perf_counter()
     cli_complete = complete_fn_for(model, cfg)
     if cli_complete is not None:
+        extra = {}
+        if session is not None:
+            new = [m for m in messages[session.seen:] if m.get("role") != "assistant"] if session.id else messages
+            messages, extra = new, {"session": session}
         try:
-            text, usage = cli_complete(model, messages)
+            text, usage = cli_complete(model, messages, **extra)
         except ProviderUnavailable:  # the planner has no fallback model: one more try after a pause
             time.sleep(PLANNER_RETRY_WAIT_SEC)
             t0 = time.perf_counter()
-            text, usage = cli_complete(model, messages)
+            text, usage = cli_complete(model, messages, **extra)
+        if session is not None:
+            session.seen += len(messages) + 1  # what it sent, plus the reply the caller appends
     else:
         import litellm
 

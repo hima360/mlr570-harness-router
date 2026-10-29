@@ -56,6 +56,70 @@ diff -rq -x __pycache__ -x '*.pyc' -x .git -x node_modules "$S" "$W" 2>/dev/null
 done"""
 
 
+VERIFY_PROMPT = """Your colleague says they fixed the problems you raised. Their report: {report}
+
+WHAT THEY DID SINCE YOUR REVIEW (newest last):
+{digest}
+
+WHAT CHANGED NOW (diff against the starting files):
+{diff}
+
+For each problem you raised, decide from the code and outputs (not their word) whether it is fixed. {explore}
+Reply with only JSON: {{"open": [{{"n": <the problem's number>, "what": "<what is still wrong>", "fix": "<what to change>"}}]}}
+Use an empty list when every problem is fixed. Do not raise new problems here."""
+
+FIX_GOAL = """Another engineer did this task. A senior review then found problems, and after their fix these are still
+open:
+{problems}
+Fix exactly these, without undoing parts that work, and check each fix the way the task's own tests would (as a
+fresh process, possibly as a non-root user, through the real entry points). Their notes on what they did are
+below. Then submit."""
+
+
+def parse_open(reply: str, problems: list[dict]) -> list[dict]:
+    """The problems the reviewer still finds open after the fix ([] when it cannot tell: never block on a broken
+    reply)."""
+    m = re.search(r"\{.*\}", reply or "", re.S)
+    try:
+        d = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        d = {}
+    out = []
+    for o in (d.get("open") or [])[:5]:
+        if not isinstance(o, dict):
+            continue
+        n = o.get("n")
+        base = problems[n - 1] if isinstance(n, int) and 1 <= n <= len(problems) else {}
+        what = str(o.get("what") or base.get("what") or "").strip()
+        if what:
+            out.append({"what": what, "fix": str(o.get("fix") or base.get("fix") or "")})
+    return out
+
+
+def senior_verify(ask, messages: list[dict], problems: list[dict], report: str, digest: str, diff: str, explore=None,
+                  max_explore: int = 0):
+    """The second look, in the same reviewer conversation (`messages` continues it, so a CLI session only sends
+    this turn): which of the raised problems are still open. Returns (open problems, n_explored)."""
+    from .planner import _explore_request
+
+    messages = [*messages, {"role": "user", "content": VERIFY_PROMPT.format(
+        report=report[:1500] or "(none)", digest=digest or "(none)", diff=diff or "(unchanged)",
+        explore=EXPLORE_NOTE.format(n=max_explore) if explore and max_explore else "")}]
+    n = 0
+    for _ in range(max_explore + 2):
+        reply = ask(messages)
+        cmd = _explore_request(reply)
+        if cmd is None:
+            return parse_open(reply, problems), n
+        messages.append({"role": "assistant", "content": reply})
+        if explore and n < max_explore:
+            n += 1
+            messages.append({"role": "user", "content": f"$ {cmd}\n{explore(cmd)}"})
+        else:
+            messages.append({"role": "user", "content": "No more commands: reply with the JSON now."})
+    return [], n
+
+
 def parse_review(reply: str) -> tuple[str, list[dict]]:
     """("ship" | "fix", problems). Anything unparsable ships: a broken review must not block the work."""
     m = re.search(r"\{.*\}", reply or "", re.S)
@@ -79,9 +143,11 @@ def problems_text(probs: list[dict], reviewer: str) -> str:
     return "\n".join(lines)
 
 
-def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=None, max_explore: int = 0):
+def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=None, max_explore: int = 0,
+                  transcript: list | None = None):
     """`ask(messages) -> reply` is the reviewer model; `explore(command) -> output` runs a read-only command.
-    Returns (verdict, problems, n_explored)."""
+    Returns (verdict, problems, n_explored); `transcript`, when given, receives the review conversation so the
+    second look (senior_verify) can continue it."""
     from .planner import _explore_request
 
     prompt = SENIOR_PROMPT.format(task=task[:6000], report=report[:1500] or "(none)", digest=digest or "(none)",
@@ -93,6 +159,8 @@ def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=N
         cmd = _explore_request(reply)
         if cmd is None:
             verdict, probs = parse_review(reply)
+            if transcript is not None:
+                transcript[:] = [*messages, {"role": "assistant", "content": reply}]
             return verdict, probs, n
         if explore and n < max_explore:
             n += 1
