@@ -22,7 +22,7 @@ from .orchestrator import Orchestrator
 from .router import Router
 from .trace import Trace
 from .verifier import read_outputs, steps_dir
-from .worker import HarborEnvAdapter, attempt_digest, run_worker
+from .worker import HarborEnvAdapter, attempt_digest, clip_output, run_worker
 
 CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "max_parallel",
                "max_plan_steps", "worker_step_limit", "cli_timeout_sec", "step_wall_time_sec", "step_idle_sec",
@@ -34,7 +34,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "acceptance_model", "acceptance_step_limit", "best_of_models",
                "planner_explore", "lead_reviews", "laya_head", "planner_top_tier",
                "d1_python", "d1_model", "d1_revision", "single_step_tier", "planner_role",
-               "helper_policy", "helper_step_limit", "max_delegations", "max_parallel_helpers")
+               "helper_policy", "helper_step_limit", "max_delegations", "max_parallel_helpers",
+               "senior_reviewer_model", "senior_review_rounds", "senior_review_explore")
 
 
 class RoutedHarness(BaseAgent):
@@ -96,6 +97,40 @@ class RoutedHarness(BaseAgent):
                 digest = ""
             return result, outputs, digest
 
+        def senior(step, report, messages):
+            """The senior reviewer's verdict on a submitted step: problem text for the worker, or ""."""
+            import shlex
+
+            from .review import DIFF_SCRIPT, problems_text, senior_review
+
+            diff = ""
+            if orch.snapshot:
+                script = DIFF_SCRIPT.format(snap=shlex.quote(orch.snapshot), work=shlex.quote(orch.workdir))
+                try:
+                    r = asyncio.run_coroutine_threadsafe(environment.exec(script, timeout_sec=60), loop).result()
+                    diff = clip_output(r.stdout or "", 30000)
+                except Exception as e:
+                    diff = f"(could not compute the diff: {e})"
+            model = self.cfg.senior_reviewer_model
+
+            def ask(msgs):
+                with report_failures(lambda info: trace.log("llm_call_failed", role="reviewer", step=step.id, **info)):
+                    return chat(self.cfg, ledger, model, msgs,
+                                on_call=lambda info: trace.log("llm_call", role="reviewer", step=step.id, **info))
+
+            def explore(cmd):
+                return asyncio.run_coroutine_threadsafe(orch._explore(environment, cmd), loop).result()
+
+            try:
+                verdict, probs, n = senior_review(ask, instruction, report, attempt_digest(messages, 6000), diff,
+                                                  explore, self.cfg.senior_review_explore)
+            except Exception as e:  # a failed review never blocks the work
+                trace.log("senior_review", step=step.id, model=model, error=f"{type(e).__name__}: {e}"[:300])
+                return ""
+            trace.log("senior_review", step=step.id, model=model, verdict=verdict, problems=probs, explored=n,
+                      diff_chars=len(diff))
+            return problems_text(probs, model.split("/")[-1]) if probs else ""
+
         def work(step, model_id, blackboard_text, output_path):
             helpers = None
             if self.cfg.helper_models:
@@ -105,7 +140,7 @@ class RoutedHarness(BaseAgent):
                 return run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=step,
                                   blackboard_text=blackboard_text, output_path=output_path,
                                   on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info),
-                                  run_helpers=helpers)
+                                  run_helpers=helpers, senior=senior if self.cfg.senior_reviewer_model else None)
 
         def ask_fixer(messages):
             with report_failures(lambda info: trace.log("llm_call_failed", role="fixer", **info)):

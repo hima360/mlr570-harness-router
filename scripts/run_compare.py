@@ -39,6 +39,8 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     # (configs/phase2-droid-lead.json = the eval config + helper_models). Only delegation differs from opus/sonnet.
     "leadopus": ("fixed:2", BASE, "configs/phase2-droid-lead.json"),
     "leadsonnet": ("fixed:1", BASE, "configs/phase2-droid-lead.json"),
+    # Sonnet builds, Opus reviews on submit (configs/phase2-droid-review.json = the eval config + senior reviewer).
+    "review": ("fixed:1", BASE, "configs/phase2-droid-review.json"),
 }
 
 

@@ -197,7 +197,8 @@ class Orchestrator:
         async def run_step(step):
             return await self._run_step(step, instruction, environment, bb)
 
-        self.snapshot = await self._snapshot(environment) if (acc or self.cfg.best_of_models) else ""
+        self.snapshot = await self._snapshot(environment) if (acc or self.cfg.best_of_models
+                                                                or self.cfg.senior_reviewer_model) else ""
         acc_task = asyncio.create_task(self._run_acceptance(acc, instruction, environment, bb)) if acc else None
         results = await run_dag(plan.steps, run_step, self.cfg.max_parallel)
         if acc_task and await acc_task:

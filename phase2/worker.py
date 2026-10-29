@@ -72,6 +72,8 @@ class SubmitGate:
     def __init__(self, inner, step, check_timeout: int, max_blocks: int = 2, reviewer=None):
         self.inner, self.step, self.check_timeout, self.max_blocks = inner, step, check_timeout, max_blocks
         self.reviewer = reviewer  # (step, outputs) -> problem text or "": checks values against evidence
+        self.senior = None  # (step, report) -> problem text or "": a stronger model reviews the work (phase2.review)
+        self.senior_left = 0
         self.blocks = 0
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
@@ -79,12 +81,16 @@ class SubmitGate:
 
         try:
             return self.inner.execute(action, cwd, timeout=timeout)
-        except Submitted:
+        except Submitted as done:
             if self.blocks >= self.max_blocks or not hasattr(self.inner, "gate"):
                 raise
             problem = self.inner.gate(self.step, self.check_timeout)
             if not problem and self.reviewer:
                 problem = self.reviewer(self.step)
+            if not problem and self.senior and self.senior_left > 0:
+                self.senior_left -= 1
+                report = ((done.args[0] if done.args else {}) or {}).get("content", "")
+                problem = self.senior(self.step, report)
             if not problem:
                 raise
             self.blocks += 1
@@ -281,7 +287,7 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
 
 
 def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, step, blackboard_text: str,
-               model=None, output_path=None, on_call=None, run_helpers=None) -> WorkerResult:
+               model=None, output_path=None, on_call=None, run_helpers=None, senior=None) -> WorkerResult:
     """Blocking: call inside asyncio.to_thread. `model` is injectable for tests; `on_call(info)` gets
     one record per model call. With `run_helpers` (phase2.delegate) this worker leads: its `delegate`
     commands run helper models and their reports are the command output."""
@@ -318,6 +324,9 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     )
     if cfg.reviewer_model and model_id != cfg.reviewer_model:
         gate.reviewer = lambda s: review_values(cfg, ledger, s, env_adapter, agent.messages, on_call)
+    if senior is not None and model_id != cfg.senior_reviewer_model:  # `senior(step, report, messages)`
+        gate.senior, gate.senior_left = (lambda s, report: senior(s, report, agent.messages)), cfg.senior_review_rounds
+        gate.max_blocks += cfg.senior_review_rounds  # a review send-back does not use up the check's send-backs
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,
                          blackboard=blackboard_text, writes_hint=writes_hint,

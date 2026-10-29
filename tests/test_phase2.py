@@ -1138,3 +1138,94 @@ def test_harbor_agent_runs_a_leads_helpers_in_the_task_container(tmp_path, monke
     assert any(c == "mkdir -p /tmp/steps/s1.h1" for c in env.commands)
     events = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines()]
     assert [e["event"] for e in events if e["event"] in ("delegate", "helper_end")] == ["delegate", "helper_end"]
+
+
+def test_tui_shows_a_leads_helpers():
+    from phase2 import tui
+
+    events = [
+        {"t": 0, "event": "config", "tiers": ["a/h", "a/s", "a/o"], "helper_models": {"fast": "a/h"}},
+        {"t": 1, "event": "plan", "steps": [{"id": "s1", "goal": "do it", "depends_on": [], "check": ""}]},
+        {"t": 2, "event": "route", "step": "s1", "model": "a/o", "tier": 2, "source": "fixed"},
+        {"t": 3, "event": "llm_call", "role": "worker", "step": "s1", "model": "a/o", "factory_credits": 900, "ms": 1000},
+        {"t": 4, "event": "delegate", "step": "s1", "helper": "s1.h1", "model": "a/h", "to": "fast", "task": "read logs"},
+        {"t": 5, "event": "llm_call", "role": "helper", "step": "s1.h1", "model": "a/h", "factory_credits": 30, "ms": 500},
+        {"t": 6, "event": "helper_end", "step": "s1", "helper": "s1.h1", "model": "a/h", "exit_status": "Submitted",
+         "n_calls": 1, "summary": "3 errors in app.log"},
+        {"t": 7, "event": "attempt", "step": "s1", "attempt": 1, "model": "a/o", "passed": True, "n_calls": 2,
+         "exit_status": "Submitted", "check": ""},
+    ]
+    lead = [{"role": "system", "content": "x"}, {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "THOUGHT: hand it out\n```mswea_bash_command\ndelegate fast <<'T'\nread logs\nT\n```"},
+            {"role": "user", "content": "HELPER s1.h1 ended"}]
+    workers = {"worker_s1_a1": lead, "worker_s1.h1": [{"role": "system"}, {"role": "user"}]}
+    rows = tui.overview(events, workers)
+    lead_node = rows[1][2][1]
+    assert lead_node[1].plain.startswith("Lead: ") and "Helper:" in lead_node[2][0][2][0][1].plain
+    panel = tui.progress_panel(events, 8.0).plain
+    assert "helper s1.h1" in panel and "lead 900 credits · helpers 30 credits" in panel
+    assert any("HELPER" in l.plain for l in tui.story_lines(events, workers))
+    assert any("→ s1.h1" in l.plain for l in tui.activity_lines(events))
+
+
+# ---------- senior review (phase2.review) ----------
+
+def test_senior_review_explores_then_judges():
+    from phase2.review import parse_review, senior_review
+
+    replies = iter(['{"explore": "wc -l /app/out.json"}',
+                    '{"verdict": "fix", "problems": [{"what": "twins merged", "evidence": "task: twins", "fix": "use dob"}]}'])
+    seen = []
+    verdict, probs, n = senior_review(lambda m: (seen.append(m[-1]["content"]), next(replies))[1], "TASK", "done",
+                                      "- ran: ls", "=== new file /app/x.py", explore=lambda c: "42 /app/out.json",
+                                      max_explore=2)
+    assert (verdict, n) == ("fix", 1) and probs[0]["what"] == "twins merged" and "42 /app/out.json" in seen[1]
+    assert "=== new file /app/x.py" in seen[0] and "read-only commands" in seen[0]
+    assert parse_review("garbage") == ("ship", []) and parse_review('{"verdict": "fix", "problems": []}') == ("ship", [])
+
+
+def test_submit_is_sent_back_once_by_the_senior_reviewer():
+    from phase2.planner import Step
+
+    cfg = load_config(senior_reviewer_model="anthropic/claude-opus-5-5", submit_checks=0)
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nfixed\n", 0) if SUBMIT in cmd else ("ok", 0))
+    reviews = []
+
+    def senior(step, report, messages):
+        reviews.append(report)
+        return "a senior reviewer found: 1. restart case not handled"
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = _scripted_model([f"printf '{SUBMIT}\\nfirst\\n'", "echo fixing", f"printf '{SUBMIT}\\nsecond\\n'"])
+        return await asyncio.to_thread(
+            run_worker, cfg, None, "anthropic/claude-sonnet-5-5", adapter, task_overall="T",
+            step=Step(id="s1", goal="g"), blackboard_text="-", model=model, senior=senior)
+
+    res = asyncio.run(main())
+    assert res.exit_status == "Submitted" and res.n_calls == 3 and len(reviews) == 1  # one round, then accepted
+
+
+def test_harbor_agent_wires_the_senior_reviewer(tmp_path, monkeypatch):
+    import types
+
+    import phase2.agent as A
+
+    got = {}
+
+    def fake_run_worker(cfg, ledger, model_id, adapter, *, step, senior=None, **kw):
+        got["problem"] = senior(step, "all done", [])
+        return WorkerResult("Submitted", "ok", 1)
+
+    monkeypatch.setattr(A, "run_worker", fake_run_worker)
+    monkeypatch.setattr(A, "chat", lambda cfg, ledger, model, msgs, on_call=None:
+                        '{"verdict": "fix", "problems": [{"what": "no restart handling"}]}')
+    env = FakeEnvironment(lambda c: ("ok\n", 0) if "cp -a" in c else ("--- a\n+++ b\n", 0) if "diff -rq" in c
+                          else ("/app\n", 0))
+    agent = A.RoutedHarness(logs_dir=tmp_path, model_name=None, policy="fixed:1", max_plan_steps="1",
+                            senior_reviewer_model="anthropic/claude-opus-5-5")
+    asyncio.run(agent.run("task", env, types.SimpleNamespace(metadata=None)))
+    assert "no restart handling" in got["problem"] and "claude-opus-5-5" in got["problem"]
+    events = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    review = next(e for e in events if e["event"] == "senior_review")
+    assert review["verdict"] == "fix" and review["diff_chars"] > 0

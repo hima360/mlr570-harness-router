@@ -18,13 +18,15 @@ from textual.widgets import (Button, DataTable, Footer, Header, Input, Label, Li
                              Select, Static, TabbedContent, TabPane, Tree)
 
 from . import jobs as J
+from .delegate import parse_delegate
 
 ROOT = Path(__file__).resolve().parents[1]
 STATUS_STYLE = {"running": "bold yellow", "passed": "bold green", "failed": "bold red", "error": "bold red",
                 "stopped": "dim", "incomplete": "dim"}
 STATUS_ICON = {"running": "●", "passed": "✓", "failed": "✗", "error": "!", "stopped": "■", "incomplete": "…"}
 ROLE_STYLE = {"PLANNER": "bold magenta", "ROUTER": "bold cyan", "WORKER": "bold blue", "VERIFIER": "bold green",
-              "ESCALATE": "bold yellow", "DONE": "bold white", "LEAD": "bold blue", "HELPER": "bold dark_orange"}
+              "ESCALATE": "bold yellow", "DONE": "bold white", "LEAD": "bold blue", "HELPER": "bold dark_orange",
+              "REVIEWER": "bold magenta"}
 LEGACY_ROUTER = {"laya": "Laya (laya_mlx, local MLX)", "arch": "Arch-Router-1.5B (katanemo, local)",
                  "fixed": "fixed policy (no model)", "random": "random policy (no model)"}
 EXIT_REASON = {"StepIdle": "no model reply for too long", "TimeExceeded": "hit the step's time cap",
@@ -109,6 +111,12 @@ def activity_lines(events: list[dict]) -> list[Text]:
         elif ev == "delegate":
             out.append(_line(t, "LEAD", e.get("step", "?"), f"→ {e.get('helper')} ({e.get('to') or 'router'}: "
                              f"{e.get('model')}): {_short(e.get('task'), 110)}"))
+        elif ev == "senior_review":
+            probs = e.get("problems") or []
+            what = (f"sent it back: {len(probs)} problem(s): " + "; ".join(_short(p.get("what"), 60) for p in probs[:2])
+                    if e.get("verdict") == "fix" else "ship it" if e.get("verdict") else f"review failed: {e.get('error')}")
+            out.append(_line(t, "REVIEWER", e.get("model", "?"), f"{e.get('step')}  read the diff "
+                             f"({e.get('diff_chars', 0)} chars), ran {e.get('explored', 0)} command(s) → {what}"))
         elif ev == "helper_end":
             out.append(_line(t, "HELPER", e.get("helper", "?"), f"{e.get('exit_status')} after {e.get('n_calls')} "
                              f"calls: {_short(e.get('summary'), 120)}"))
@@ -426,6 +434,13 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
                 if a.get("exit_status") not in (None, "Submitted"):
                     v.append(f"  (worker stopped: {a['exit_status']})", style="dim")
                 out.append(v)
+        for r in (e for e in events if e.get("event") == "senior_review" and e.get("step") == sid):
+            probs = r.get("problems") or []
+            out.append(head("REVIEWER", pretty_model(r.get("model", "")), "read the task, the transcript and the diff"))
+            out.append(Text("      → ship it" if r.get("verdict") == "ship" else
+                            f"      → sent back {len(probs)} problem(s)", style="green" if r.get("verdict") == "ship" else "yellow"))
+            for p in probs:
+                out.append(Text(f"        • {_short(p.get('what'), 160)}", style="yellow"))
         for h in helper_states(events, sid):
             out.append(head("HELPER", pretty_model(h["model"]), f"{h['id']}, given a sub-task by the lead · "
                             f"{h['calls']} calls · {spend_text(h['spend'])}"))
@@ -623,6 +638,11 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
     acc = next((e for e in events if e.get("event") == "acceptance"), None)
     if any(e.get("event") == "acceptance_planned" for e in events):
         bits.append("acceptance tests " + ("being written" if not acc else "ready" if acc.get("ready") else "FAILED to write"))
+    reviews_sr = [e for e in events if e.get("event") == "senior_review"]
+    if reviews_sr:
+        sent = sum(e.get("verdict") == "fix" for e in reviews_sr)
+        bits.append(f"senior review by {pretty_model(reviews_sr[-1].get('model', ''))}: "
+                    + (f"sent the work back {sent} time(s)" if sent else "approved"))
     reopens = sum(1 for e in events if e.get("event") == "reopen")
     if reopens:
         bits.append(f"{reopens} step(s) re-opened by acceptance tests")
@@ -727,6 +747,7 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                                                        f"{rated} and gave it to ", (target, "bold")), []))
         esc_model = tiers[esc["to_tier"]] if esc and tiers and esc.get("to_tier", 99) < len(tiers) else ""
         handoff = next((e for e in events if e.get("event") == "handoff" and e.get("step") == sid), None)
+        helper_names, helpers = cfg.get("helper_models") or {}, helper_states(events, sid)
         for n, msgs in _attempt_files(workers, sid):
             if n > 1 and esc:
                 children.append((f"{sid}/esc", Text.assemble(
@@ -741,8 +762,10 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                 thought, cmd = split_reply(str(msgs[i].get("content") or ""))
                 nxt = msgs[i + 1] if i + 1 < len(msgs) else None
                 ok = None if nxt is None else (True if nxt.get("role") == "exit" else summarize_output(str(nxt.get("content") or ""))[0])
-                turns.append((f"{sid}/a{n}/t{k}", turn_summary(thought, cmd, ok), []))
-            head = Text.assemble(("Worker: ", "bold blue"), (model, "bold"),
+                handed = parse_delegate(cmd or "", list(helper_names)) if helper_names else None
+                kids = [helper_node(f"{sid}/a{n}/t{k}", helpers.pop(0), workers) for _ in (handed or []) if helpers]
+                turns.append((f"{sid}/a{n}/t{k}", turn_summary(thought, cmd, ok), kids))
+            head = Text.assemble(("Lead: " if helper_names else "Worker: ", "bold blue"), (model, "bold"),
                                  " (second try, one tier up)" if n > 1 else "")
             children.append((f"{sid}/a{n}", head, turns or [(f"{sid}/a{n}/start", Text("Starting …", style="yellow"), [])]))
             a = atts.get(n)
@@ -757,6 +780,7 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                 if a.get("exit_status") not in (None, "Submitted"):
                     text.append(f" (worker stopped: {EXIT_REASON.get(a['exit_status'], a['exit_status'])})", style="dim")
                 children.append((f"{sid}/a{n}/check", text, []))
+        children += [helper_node(sid, h, workers) for h in helpers]  # handed out but not yet in the lead's file
         if esc and not any(k == f"{sid}/esc" for k, _, _ in children):
             children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold yellow"), "to ",
                                                          (pretty_model(esc_model) or "the next tier", "bold")), []))
@@ -772,6 +796,23 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
     elif done:
         rows.append(("done", Text("All steps finished; Terminal-Bench is grading the result …", style="yellow"), []))
     return rows
+
+def helper_node(parent: str, h: dict, workers: dict[str, list]) -> tuple:
+    """A helper under the lead's turn that handed it its sub-task: its turns, then its report."""
+    msgs = workers.get(f"worker_{h['id']}", [])
+    turns = []
+    for k, i in enumerate(i for i, m in enumerate(msgs) if i >= 2 and m.get("role") == "assistant"):
+        thought, cmd = split_reply(str(msgs[i].get("content") or ""))
+        nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+        ok = None if nxt is None else (True if nxt.get("role") == "exit" else summarize_output(str(nxt.get("content") or ""))[0])
+        turns.append((f"{parent}/{h['id']}/t{k}", turn_summary(thought, cmd, ok), []))
+    look = {"working": ("●", "yellow"), "done": ("✔", "green"), "failed": ("✘", "red")}[h["state"]]
+    if h["summary"]:
+        turns.append((f"{parent}/{h['id']}/report", Text.assemble(("Report: ", "bold"), _short(h["summary"], 150)), []))
+    head = Text.assemble((f"{look[0]} Helper: ", f"bold {look[1]}"), (pretty_model(h["model"]), "bold"),
+                         f"  {_short(h['task'], 80)}  ", (f"{h['calls']} calls · {spend_text(h['spend'])}", "dim"))
+    return (f"{parent}/{h['id']}", head, turns or [(f"{parent}/{h['id']}/start", Text("Starting …", style="yellow"), [])])
+
 
 # ---------- screens ----------
 

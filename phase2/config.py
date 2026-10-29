@@ -94,6 +94,11 @@ class HarnessConfig:
     # `delegate <name> <<'TASK' ... TASK` and gets the helper's report back; a sub-task with no name is routed by
     # helper_policy over the helpers (index 0 = cheapest).
     helper_models: dict = field(default_factory=dict)
+    # Senior review (phase2.review): when a worker submits, this stronger model reviews the task, the transcript and
+    # the diff (it may run senior_review_explore read-only commands) and can send the work back once per round.
+    senior_reviewer_model: str = ""
+    senior_review_rounds: int = 1
+    senior_review_explore: int = 4
     helper_policy: str = "laya"
     helper_step_limit: int = 30
     max_delegations: int = 12
@@ -163,7 +168,7 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
     from .droid import is_droid
 
     missing = [m for m in cfg.tiers + [cfg.planner_model] + list(cfg.helper_models.values())
-               + [x for x in (cfg.fixer_model, cfg.reviewer_model, cfg.acceptance_model) if x]
+               + [x for x in (cfg.fixer_model, cfg.reviewer_model, cfg.acceptance_model, cfg.senior_reviewer_model) if x]
                if not is_droid(m) and m not in cfg.prices_per_million]
     if missing:
         raise ValueError(f"no price for models: {missing}")
