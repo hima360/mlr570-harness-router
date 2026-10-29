@@ -90,6 +90,14 @@ class HarnessConfig:
     # "author": the planner's goals and checks bind the workers. "advisor": it says what must be true, its ideas go to
     # workers as hypotheses, final steps get no planner check, and a plan without parallel work becomes one step.
     planner_role: str = "author"
+    # Lead and helpers (phase2.delegate): name -> model id, cheapest first. {} = off. A step's worker may then run
+    # `delegate <name> <<'TASK' ... TASK` and gets the helper's report back; a sub-task with no name is routed by
+    # helper_policy over the helpers (index 0 = cheapest).
+    helper_models: dict = field(default_factory=dict)
+    helper_policy: str = "laya"
+    helper_step_limit: int = 30
+    max_delegations: int = 12
+    max_parallel_helpers: int = 3
     # policy "d1": Liquid AI's d1-2B served from its own venv; revision pinned (it ships its own model code)
     d1_python: str = ".venv-d1/bin/python"
     d1_model: str = "LiquidAI/d1-2B"
@@ -154,7 +162,8 @@ def load_config(path: str | Path | None = None, **overrides) -> HarnessConfig:
             setattr(cfg, name, (int if f.type in (int, "int") else float)(value))
     from .droid import is_droid
 
-    missing = [m for m in cfg.tiers + [cfg.planner_model] + [x for x in (cfg.fixer_model, cfg.reviewer_model, cfg.acceptance_model) if x]
+    missing = [m for m in cfg.tiers + [cfg.planner_model] + list(cfg.helper_models.values())
+               + [x for x in (cfg.fixer_model, cfg.reviewer_model, cfg.acceptance_model) if x]
                if not is_droid(m) and m not in cfg.prices_per_million]
     if missing:
         raise ValueError(f"no price for models: {missing}")

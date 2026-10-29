@@ -274,14 +274,17 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
             on_result(usage, message.get("content"), (time.perf_counter() - t0) * 1e3)
             return message
 
-    return LedgerModel(model_name=litellm_name(model_id), cost_tracking="ignore_errors",
-                       model_kwargs={"api_base": cfg.base_url, "api_key": cfg.api_key})
+    m = LedgerModel(model_name=litellm_name(model_id), cost_tracking="ignore_errors",
+                    model_kwargs={"api_base": cfg.base_url, "api_key": cfg.api_key})
+    m.idle_guard = guard
+    return m
 
 
 def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, step, blackboard_text: str,
-               model=None, output_path=None, on_call=None) -> WorkerResult:
+               model=None, output_path=None, on_call=None, run_helpers=None) -> WorkerResult:
     """Blocking: call inside asyncio.to_thread. `model` is injectable for tests; `on_call(info)` gets
-    one record per model call."""
+    one record per model call. With `run_helpers` (phase2.delegate) this worker leads: its `delegate`
+    commands run helper models and their reports are the command output."""
     from minisweagent.agents.default import DefaultAgent
     from minisweagent.models.litellm_textbased_model import LitellmTextbasedModel
 
@@ -297,7 +300,15 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""
-    gate = SubmitGate(env_adapter, step, cfg.check_timeout, cfg.submit_checks)
+    env = env_adapter
+    if run_helpers is not None:
+        from .delegate import DelegatingEnv, lead_hint
+
+        guard = getattr(model, "idle_guard", None)
+        env = DelegatingEnv(env_adapter, cfg.helper_models, run_helpers, cfg.max_delegations,
+                            on_return=guard.progress if guard else None)
+        step = step.model_copy(update={"goal": step.goal + lead_hint(cfg.helper_models, cfg.max_delegations)})
+    gate = SubmitGate(env, step, cfg.check_timeout, cfg.submit_checks)
     agent = DefaultAgent(
         model, gate,
         system_template="You are a careful software engineer operating a Linux shell.",

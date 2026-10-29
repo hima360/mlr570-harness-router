@@ -1042,3 +1042,70 @@ def test_advisor_planner_keeps_parallel_work_and_handoff_checks(tmp_path):
     asyncio.run(orch.run("task", FakeEnvironment()))
     checks = {s.id: s.check for s in seen}
     assert checks == {"a": "test -s /app/a.csv", "b": "test -s /app/b.csv", "c": ""}
+
+
+# ---------- lead and helpers (phase2.delegate) ----------
+
+def test_parse_delegate_forms():
+    from phase2.delegate import parse_delegate
+
+    names = ["fast", "strong"]
+    assert parse_delegate("delegate fast <<'TASK'\nread a.py and report\nTASK", names) == [("fast", "read a.py and report")]
+    assert parse_delegate("delegate run the tests", names) == [("", "run the tests")]
+    multi = parse_delegate('delegate <<\'TASK\'\n[{"to": "strong", "task": "fix b.py"}, {"task": "list c/"}]\nTASK', names)
+    assert multi == [("strong", "fix b.py"), ("", "list c/")]
+    assert parse_delegate("delegated.sh --x", names) is None and parse_delegate("ls", names) is None
+    assert parse_delegate("delegate", names) is None
+
+
+def test_lead_delegates_and_gets_the_helpers_reports():
+    from phase2.delegate import DelegatingEnv, make_helper_runner
+    from phase2.planner import Step
+
+    cfg = load_config(helper_models={"fast": "zai/glm-5.3-flash", "strong": "anthropic/claude-sonnet-5-5"},
+                      max_delegations=2)
+    trace, ran = Trace(None), []
+
+    def run_one(model, step, team):
+        ran.append((model, step.id, team))
+        return WorkerResult("Submitted", f"done by {model}", 3), {"n_failing": "2"}, ""
+
+    runner = make_helper_runner(cfg, None, None, trace, Step(id="s1", goal="g"), "anthropic/claude-opus-5-5", "T",
+                                run_one, route=lambda task: 0)
+    touched = []
+
+    class Inner:
+        def execute(self, action, cwd="", *, timeout=None):
+            return {"output": "shell " + action["command"], "returncode": 0, "exception_info": ""}
+
+    env = DelegatingEnv(Inner(), cfg.helper_models, runner, cfg.max_delegations, on_return=lambda: touched.append(1))
+    out = env.execute({"command": 'delegate <<\'T\'\n[{"to": "strong", "task": "fix it"}, {"task": "read it"}]\nT'})
+    assert "HELPER s1.h1 (anthropic/claude-sonnet-5-5, strong)" in out["output"] and "n_failing=2" in out["output"]
+    assert "s1.h2 (zai/glm-5.3-flash, fast)" in out["output"] and touched == [1]  # unnamed -> router -> cheapest
+    assert "Helpers working at the same time" in ran[0][2] and "opus" in ran[0][2]
+    assert env.execute({"command": "ls"})["output"] == "shell ls"
+    assert "No delegations left" in env.execute({"command": "delegate fast x"})["output"]
+    assert [e["event"] for e in trace.events].count("helper_end") == 2
+
+
+def test_worker_with_helpers_turns_delegate_into_a_helper_run():
+    from phase2.planner import Step
+
+    cfg = load_config(helper_models={"fast": "zai/glm-5.3-flash"})
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nfixed\n", 0) if SUBMIT in cmd else ("ok", 0))
+    seen = []
+
+    def run_helpers(tasks):
+        seen.append(tasks)
+        return ["HELPER s1.h1 ... report"]
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = _scripted_model(["delegate fast <<'TASK'\nread the logs\nTASK", f"printf '{SUBMIT}\\nfixed\\n'"])
+        return await asyncio.to_thread(
+            run_worker, cfg, None, "anthropic/claude-opus-5-5", adapter, task_overall="T",
+            step=Step(id="s1", goal="g"), blackboard_text="-", model=model, run_helpers=run_helpers)
+
+    res = asyncio.run(main())
+    assert res.exit_status == "Submitted" and seen == [[("fast", "read the logs")]]
+    assert not any("delegate" in c for c in env.commands)  # never sent to the container shell

@@ -35,6 +35,10 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "planner": ("planner", ROUTED),
     "levers": ("planner", {**ROUTED, **{"worker_step_limit": "80", "step_wall_time_sec": "3600", "submit_checks": "3"}},
                "configs/phase2-droid-levers.json"),
+    # Lead + helpers: the baseline's single agent and budget, plus `delegate` to cheaper helpers
+    # (configs/phase2-droid-lead.json = the eval config + helper_models). Only delegation differs from opus/sonnet.
+    "leadopus": ("fixed:2", BASE, "configs/phase2-droid-lead.json"),
+    "leadsonnet": ("fixed:1", BASE, "configs/phase2-droid-lead.json"),
 }
 
 
@@ -96,7 +100,7 @@ def summary(prefix: str) -> None:
         ev = [json.loads(l) for l in open(t + "agent/trace.jsonl")] if os.path.exists(t + "agent/trace.jsonl") else []
         credits = sum(e.get("factory_credits") or 0 for e in ev if e["event"] == "llm_call")
         frac, mins = tests_fraction(t), (ev[-1]["t"] / 60 if ev else 0)
-        models = ",".join(sorted({e["model"].split("/")[-1] for e in ev if e["event"] == "attempt"}))
+        models = ",".join(sorted({e["model"].split("/")[-1] for e in ev if e["event"] in ("attempt", "helper_end")}))
         rows.append((task, setup, f"reward={reward} tests={'-' if frac is None else f'{frac:.2f}'} "
                                   f"${ar.get('cost_usd') or 0:.2f} {credits:,.0f}cr {mins:.0f}min {models} {exc or ''}"))
         a = agg[setup]

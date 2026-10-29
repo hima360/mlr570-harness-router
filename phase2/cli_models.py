@@ -370,4 +370,5 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
 
     m = CliTextModel(model_name=model, cost_tracking="ignore_errors")
     m.cli_session = session
+    m.idle_guard = guard  # a lead's helpers count as progress (phase2.delegate)
     return m

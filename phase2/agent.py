@@ -15,12 +15,14 @@ from harbor.agents.base import BaseAgent
 from . import __version__
 from .cli_models import report_failures
 from .config import load_config
+from .delegate import make_helper_runner
 from .ledger import Ledger
 from .llm import chat
 from .orchestrator import Orchestrator
 from .router import Router
 from .trace import Trace
-from .worker import HarborEnvAdapter, run_worker
+from .verifier import read_outputs, steps_dir
+from .worker import HarborEnvAdapter, attempt_digest, run_worker
 
 CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "max_parallel",
                "max_plan_steps", "worker_step_limit", "cli_timeout_sec", "step_wall_time_sec", "step_idle_sec",
@@ -31,7 +33,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "reviewer_model", "team_roster", "recency_reminder", "output_guard", "env_bootstrap",
                "acceptance_model", "acceptance_step_limit", "best_of_models",
                "planner_explore", "lead_reviews", "laya_head", "planner_top_tier",
-               "d1_python", "d1_model", "d1_revision", "single_step_tier", "planner_role")
+               "d1_python", "d1_model", "d1_revision", "single_step_tier", "planner_role",
+               "helper_policy", "helper_step_limit", "max_delegations", "max_parallel_helpers")
 
 
 class RoutedHarness(BaseAgent):
@@ -66,11 +69,43 @@ class RoutedHarness(BaseAgent):
                 return chat(self.cfg, ledger, self.cfg.planner_model, messages,
                             on_call=lambda info: trace.log("llm_call", role="planner", **info))
 
+        helper_route = [None]
+
+        def route_helper(task):  # a sub-task the lead did not assign: the local router picks a helper
+            if helper_route[0] is None:
+                import dataclasses
+
+                pool = list(self.cfg.helper_models.values())
+                helper_route[0] = Router(dataclasses.replace(self.cfg, policy=self.cfg.helper_policy,
+                                                             tiers=pool + pool[-1:]))
+            return helper_route[0].route("helper", task).tier
+
+        def run_helper(lead_step, model_id, step, team):
+            out_path = Path(logs) / f"worker_{step.id}.json"
+            asyncio.run_coroutine_threadsafe(environment.exec(f"mkdir -p {steps_dir(step.id)}", timeout_sec=30),
+                                             loop).result()
+            with report_failures(lambda info: trace.log("llm_call_failed", role="helper", step=step.id, **info)):
+                result = run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=step,
+                                    blackboard_text=team, output_path=out_path,
+                                    on_call=lambda info: trace.log("llm_call", role="helper", step=step.id,
+                                                                   lead=lead_step.id, **info))
+            outputs, _ = asyncio.run_coroutine_threadsafe(read_outputs(environment, step), loop).result()
+            try:
+                digest = attempt_digest(json.loads(out_path.read_text()).get("messages", []), 1500)
+            except (OSError, ValueError):
+                digest = ""
+            return result, outputs, digest
+
         def work(step, model_id, blackboard_text, output_path):
+            helpers = None
+            if self.cfg.helper_models:
+                helpers = make_helper_runner(self.cfg, ledger, adapter, trace, step, model_id, instruction,
+                                             lambda m, s, t: run_helper(step, m, s, t), route=route_helper)
             with report_failures(lambda info: trace.log("llm_call_failed", role="worker", step=step.id, **info)):
                 return run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=step,
                                   blackboard_text=blackboard_text, output_path=output_path,
-                                  on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info))
+                                  on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info),
+                                  run_helpers=helpers)
 
         def ask_fixer(messages):
             with report_failures(lambda info: trace.log("llm_call_failed", role="fixer", **info)):
