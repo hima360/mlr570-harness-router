@@ -24,7 +24,7 @@ STATUS_STYLE = {"running": "bold yellow", "passed": "bold green", "failed": "bol
                 "stopped": "dim", "incomplete": "dim"}
 STATUS_ICON = {"running": "●", "passed": "✓", "failed": "✗", "error": "!", "stopped": "■", "incomplete": "…"}
 ROLE_STYLE = {"PLANNER": "bold magenta", "ROUTER": "bold cyan", "WORKER": "bold blue", "VERIFIER": "bold green",
-              "ESCALATE": "bold yellow", "DONE": "bold white"}
+              "ESCALATE": "bold yellow", "DONE": "bold white", "LEAD": "bold blue", "HELPER": "bold dark_orange"}
 LEGACY_ROUTER = {"laya": "Laya (laya_mlx, local MLX)", "arch": "Arch-Router-1.5B (katanemo, local)",
                  "fixed": "fixed policy (no model)", "random": "random policy (no model)"}
 EXIT_REASON = {"StepIdle": "no model reply for too long", "TimeExceeded": "hit the step's time cap",
@@ -100,11 +100,18 @@ def activity_lines(events: list[dict]) -> list[Text]:
             out.append(_line(t, "ROUTER", _router_name(e)[:34],
                              f"{e.get('step')} → tier {e.get('tier')} {_tier_model(e, events)}{score}{conf} "
                              f"({float(e.get('ms') or 0):.0f} ms)"))
-        elif ev == "llm_call" and e.get("role") == "worker":
+        elif ev == "llm_call" and e.get("role") in ("worker", "helper"):
             m = CMD_RE.search(e.get("reply", ""))
             said = f"$ {m.group(1).strip()}" if m else e.get("reply", "")
-            out.append(_line(t, "WORKER", e.get("model", "?"),
+            role = "HELPER" if e.get("role") == "helper" else "LEAD" if cfg.get("helper_models") else "WORKER"
+            out.append(_line(t, role, e.get("model", "?"),
                              f"{e.get('step')}  {_secs(e.get('ms'))}  {_usage(e)}  {said[:140]}"))
+        elif ev == "delegate":
+            out.append(_line(t, "LEAD", e.get("step", "?"), f"→ {e.get('helper')} ({e.get('to') or 'router'}: "
+                             f"{e.get('model')}): {_short(e.get('task'), 110)}"))
+        elif ev == "helper_end":
+            out.append(_line(t, "HELPER", e.get("helper", "?"), f"{e.get('exit_status')} after {e.get('n_calls')} "
+                             f"calls: {_short(e.get('summary'), 120)}"))
         elif ev == "llm_call_failed":
             what = {"timeout": "no reply", "provider_unavailable": "provider unreachable",
                     "transient": "quick failure", "error": "failed"}.get(e.get("kind"), e.get("kind"))
@@ -285,6 +292,7 @@ def describe_command(cmd: str) -> str:
         "npm": "ran npm", "pytest": "ran tests", "jq": "queried JSON",
         "for": "looped over items", "while": "ran a loop", "bash": "ran a shell script", "sh": "ran a shell script",
         "test": "checked a condition", "diff": "compared files", "tar": "unpacked an archive", "unzip": "unpacked an archive",
+        "delegate": "handed sub-task(s) to helpers",
     }
     desc = table.get(verb, f"ran {verb}" if verb else "ran a command")
     if ">" in core and verb in ("echo", "printf", "cat", "python3", "python"):
@@ -315,8 +323,8 @@ def summarize_output(obs: str) -> tuple[bool, str]:
 
 
 def _attempt_files(workers: dict, step: str) -> list[tuple[int, list]]:
-    return sorted(((int(k.rsplit("_a", 1)[1]), v) for k, v in workers.items()
-                   if k.startswith(f"worker_{step}_a")), key=lambda kv: kv[0])
+    pat = re.compile(rf"worker_{re.escape(step)}_a(\d+)$")  # not repair turns or a lead's helpers
+    return sorted(((int(m.group(1)), v) for k, v in workers.items() if (m := pat.match(k))), key=lambda kv: kv[0])
 
 
 def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
@@ -381,8 +389,9 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
                 out.append(head("ESCALATE", "orchestrator", f"first attempt did not pass, retrying one tier up on "
                                 f"{pretty_model(esc_model) if esc_model else 'the next tier'}"))
             amodel = attempts.get(n, {}).get("model") or (model if n == 1 else esc_model)
-            out.append(head("WORKER", pretty_model(amodel) if amodel else "worker",
-                            f"attempt {n}, tool: bash in the task container"))
+            out.append(head("LEAD" if cfg.get("helper_models") else "WORKER", pretty_model(amodel) if amodel else "worker",
+                            f"attempt {n}, tool: bash in the task container"
+                            + (", can hand sub-tasks to helpers" if cfg.get("helper_models") else "")))
             turn = 0
             for i, m in enumerate(msgs[2:], start=2):
                 if m.get("role") != "assistant":
@@ -417,6 +426,12 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
                 if a.get("exit_status") not in (None, "Submitted"):
                     v.append(f"  (worker stopped: {a['exit_status']})", style="dim")
                 out.append(v)
+        for h in helper_states(events, sid):
+            out.append(head("HELPER", pretty_model(h["model"]), f"{h['id']}, given a sub-task by the lead · "
+                            f"{h['calls']} calls · {spend_text(h['spend'])}"))
+            out.append(Text(f"      task: {_short(h['task'], 170)}"))
+            out.append(Text(f"      → {_short(h['summary'], 170)}" if h["summary"] else "      … working",
+                            style={"done": "green", "failed": "red"}.get(h["state"], "yellow")))
         if esc and not _attempt_files(workers, sid)[1:]:
             out.append(head("ESCALATE", "orchestrator", f"retrying one tier up on {pretty_model(esc_model) or 'the next tier'}"))
         out.append(Text(""))
@@ -510,6 +525,19 @@ def step_states(events: list[dict], now_t: float) -> list[dict]:
     return out
 
 
+def helper_states(events: list[dict], step_id: str) -> list[dict]:
+    """The helpers a lead step handed sub-tasks to: id, model, task, working/done/failed, calls and spend."""
+    out = []
+    for d in (e for e in events if e.get("event") == "delegate" and e.get("step") == step_id):
+        hid = d.get("helper")
+        end = next((e for e in events if e.get("event") == "helper_end" and e.get("helper") == hid), None)
+        calls = [e for e in events if e.get("event") == "llm_call" and e.get("step") == hid]
+        state = "working" if not end else "done" if end.get("exit_status") == "Submitted" else "failed"
+        out.append({"id": hid, "model": d.get("model", ""), "task": d.get("task", ""), "state": state,
+                    "calls": len(calls), "spend": spend(calls), "summary": (end or {}).get("summary", "")})
+    return out
+
+
 STATE_LOOK = {"done": ("✓", "bold green", "done"), "failed": ("✗", "bold red", "failed"),
               "working": ("●", "bold yellow", "working"), "retrying": ("●", "bold yellow",
                                                                      "retrying with a stronger model"),
@@ -579,6 +607,12 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
     if total["input"]:
         line += f"   ·   {100 * total['cached'] / total['input']:.0f}% of input from cache"
     t.append(line + "\n", style="dim")
+    if any(e.get("event") == "delegate" for e in events):
+        helpers = [e for e in events if e.get("event") == "llm_call" and e.get("role") == "helper"]
+        lead = spend([e for e in events if e.get("role") != "helper"])
+        hs = spend(helpers)
+        t.append(f"Team      lead {spend_text(lead)} · helpers {spend_text(hs)} over {hs['calls']} calls "
+                 f"({sum(1 for e in events if e.get('event') == 'delegate')} sub-tasks handed out)\n", style="dim")
     team = {k: sum(1 for e in events if e.get("event") == k) for k in ("fork", "triage", "rerun", "stop")}
     updates = sum(1 for e in events if e.get("event") == "llm_call" and e.get("team_update"))
     reviews = sum(1 for e in events if e.get("event") == "llm_call" and e.get("purpose") == "review")
@@ -632,6 +666,11 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
             if s["attempt"] > 1:
                 line += f" · needed {s['attempt'] - 1} escalation(s)"
             t.append(line + "\n", style="dim")
+        for h in helper_states(events, s["id"]):
+            look = {"working": ("●", "yellow"), "done": ("✓", "green"), "failed": ("✗", "red")}[h["state"]]
+            t.append(f"           ↳ {look[0]} helper {h['id']} ", style=look[1])
+            t.append(pretty_model(h["model"]), style="bold")
+            t.append(f"  {_short(h['task'], 60)}  ·  {h['calls']} calls · {spend_text(h['spend'])}\n", style="dim")
     if status != "running":
         if reward is not None:
             verdict = "passed" if reward == 1 else "did not pass"
@@ -1071,7 +1110,11 @@ class HarnessTUI(App):
 
 
 def main() -> None:
-    HarnessTUI().run()
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=str(ROOT), help="folder whose jobs/ to show (the demo uses demo/)")
+    HarnessTUI(root=Path(ap.parse_args().root)).run()
 
 
 if __name__ == "__main__":

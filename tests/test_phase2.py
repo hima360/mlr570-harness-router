@@ -1109,3 +1109,32 @@ def test_worker_with_helpers_turns_delegate_into_a_helper_run():
     res = asyncio.run(main())
     assert res.exit_status == "Submitted" and seen == [[("fast", "read the logs")]]
     assert not any("delegate" in c for c in env.commands)  # never sent to the container shell
+
+
+def test_harbor_agent_runs_a_leads_helpers_in_the_task_container(tmp_path, monkeypatch):
+    import types
+
+    import phase2.agent as A
+
+    calls = []
+
+    def fake_run_worker(cfg, ledger, model_id, adapter, *, task_overall, step, blackboard_text, output_path=None,
+                        on_call=None, run_helpers=None, **kw):
+        calls.append((step.id, model_id, run_helpers is not None))
+        if run_helpers:  # the lead: hand out one sub-task, then finish
+            reports = run_helpers([("fast", "count the rows in data.csv")])
+            assert "HELPER s1.h1" in reports[0] and "rows=42" in reports[0]
+            return WorkerResult("Submitted", "done with help", 2)
+        return WorkerResult("Submitted", "counted", 1)  # the helper
+
+    monkeypatch.setattr(A, "run_worker", fake_run_worker)
+    env = FakeEnvironment(lambda c: ("rows=42\n", 0) if "outputs.txt" in c else ("/app\n", 0))
+    agent = A.RoutedHarness(logs_dir=tmp_path, model_name=None, policy="fixed:1", max_plan_steps="1",
+                            config=None)
+    agent.cfg.helper_models = {"fast": "zai/glm-5.3-flash"}
+    ctx = types.SimpleNamespace(metadata=None)
+    asyncio.run(agent.run("task", env, ctx))
+    assert calls == [("s1", agent.cfg.tiers[1], True), ("s1.h1", "zai/glm-5.3-flash", False)]
+    assert any(c == "mkdir -p /tmp/steps/s1.h1" for c in env.commands)
+    events = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    assert [e["event"] for e in events if e["event"] in ("delegate", "helper_end")] == ["delegate", "helper_end"]
