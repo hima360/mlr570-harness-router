@@ -1187,7 +1187,7 @@ def test_senior_review_explores_then_judges():
 def test_submit_is_sent_back_once_by_the_senior_reviewer():
     from phase2.planner import Step
 
-    cfg = load_config(senior_reviewer_model="anthropic/claude-opus-5-5", submit_checks=0)
+    cfg = load_config(senior_reviewer_model="anthropic/claude-opus-5-5", submit_checks=0, senior_verify=True)
     env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nfixed\n", 0) if SUBMIT in cmd else ("ok", 0))
     reviews = []
 
@@ -1274,7 +1274,7 @@ def test_problems_still_open_after_the_fix_go_to_the_fix_model(tmp_path, monkeyp
     monkeypatch.setattr(A, "run_worker", fake_run_worker)
     monkeypatch.setattr(A, "chat", lambda cfg, ledger, model, msgs, on_call=None, **kw: next(replies))
     agent = A.RoutedHarness(logs_dir=tmp_path, model_name=None, policy="fixed:1", max_plan_steps="1",
-                            senior_reviewer_model="anthropic/claude-opus-5-5")
+                            senior_reviewer_model="anthropic/claude-opus-5-5", senior_verify="true")
     asyncio.run(agent.run("task", FakeEnvironment(lambda c: ("/app\n", 0)), types.SimpleNamespace(metadata=None)))
     summary = json.loads((tmp_path / "summary.json").read_text())
     (lead, _), (fixer, fix_step) = calls

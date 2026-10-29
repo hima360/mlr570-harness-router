@@ -100,8 +100,10 @@ class HarnessConfig:
     senior_review_rounds: int = 1
     senior_review_explore: int = 4
     # After the worker's fix, a second look at only the raised problems; any still open go to senior_fix_model
-    # ("" = the reviewer's model) for one attempt of at most senior_fix_step_limit turns.
-    senior_verify: bool = True
+    # ("" = the reviewer's model) for one attempt of at most senior_fix_step_limit turns. Off: measured 2026-10-29
+    # (ev8 vs ev7, same 10 runs) it solved the same 5/10 for 1.69M more credits, and the second look judged a
+    # problem fixed that the hidden tests still failed.
+    senior_verify: bool = False
     senior_fix_model: str = ""
     senior_fix_step_limit: int = 25
     helper_policy: str = "laya"

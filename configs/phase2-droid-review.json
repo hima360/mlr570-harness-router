@@ -52,7 +52,7 @@
   "senior_reviewer_model": "droid/claude-opus-5-5",
   "senior_review_rounds": 1,
   "senior_review_explore": 3,
-  "senior_verify": true,
+  "senior_verify": false,
   "senior_fix_model": "",
   "senior_fix_step_limit": 25
 }
