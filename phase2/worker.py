@@ -82,22 +82,27 @@ class SubmitGate:
         try:
             return self.inner.execute(action, cwd, timeout=timeout)
         except Submitted as done:
-            if self.blocks >= self.max_blocks or not hasattr(self.inner, "gate"):
-                raise
-            problem = self.inner.gate(self.step, self.check_timeout)
-            if not problem and self.reviewer:
-                problem = self.reviewer(self.step)
-            if not problem and self.senior and self.senior_left > 0:
+            problem = ""
+            if self.blocks < self.max_blocks and hasattr(self.inner, "gate"):
+                problem = self.inner.gate(self.step, self.check_timeout)
+                if not problem and self.reviewer:
+                    problem = self.reviewer(self.step)
+                if problem:
+                    self.blocks += 1
+                    left = self.max_blocks - self.blocks
+                    return {"output": f"NOT DONE YET: {problem}\nFix it, then submit again"
+                                      f"{f' ({left} more check before the step ends)' if left else ' (last check)'}.",
+                            "returncode": 1, "exception_info": ""}
+            # The senior review has its own rounds: other send-backs must not use them up (2026-10-29: a value
+            # reviewer sent payments back three times on note-keeping and the senior review never ran).
+            if self.senior and self.senior_left > 0:
                 self.senior_left -= 1
                 report = ((done.args[0] if done.args else {}) or {}).get("content", "")
                 problem = self.senior(self.step, report)
-            if not problem:
-                raise
-            self.blocks += 1
-            left = self.max_blocks - self.blocks
-            return {"output": f"NOT DONE YET: {problem}\nFix it, then submit again"
-                              f"{f' ({left} more check before the step ends)' if left else ' (last check)'}.",
-                    "returncode": 1, "exception_info": ""}
+                if problem:
+                    return {"output": f"NOT DONE YET: {problem}\nFix them, then submit again.", "returncode": 1,
+                            "exception_info": ""}
+            raise
 
     def __getattr__(self, name):
         return getattr(self.inner, name)
@@ -326,7 +331,6 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
         gate.reviewer = lambda s: review_values(cfg, ledger, s, env_adapter, agent.messages, on_call)
     if senior is not None and model_id != cfg.senior_reviewer_model:  # `senior(step, report, messages)`
         gate.senior, gate.senior_left = (lambda s, report: senior(s, report, agent.messages)), cfg.senior_review_rounds
-        gate.max_blocks += cfg.senior_review_rounds  # a review send-back does not use up the check's send-backs
     try:
         info = agent.run(task_overall=task_overall, step_id=step.id, step_goal=step.goal,
                          blackboard=blackboard_text, writes_hint=writes_hint,

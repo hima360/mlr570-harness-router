@@ -1229,3 +1229,26 @@ def test_harbor_agent_wires_the_senior_reviewer(tmp_path, monkeypatch):
     events = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines()]
     review = next(e for e in events if e["event"] == "senior_review")
     assert review["verdict"] == "fix" and review["diff_chars"] > 0
+
+
+def test_senior_review_runs_even_after_other_send_backs_are_used_up():
+    from minisweagent.exceptions import Submitted
+
+    from phase2.planner import Step
+    from phase2.worker import SubmitGate
+
+    class Inner:
+        def execute(self, action, cwd="", *, timeout=None):
+            raise Submitted({"role": "exit", "content": "done"})
+
+        def gate(self, step, timeout):
+            return "missing evidence for x"  # a value reviewer that always objects
+
+    gate = SubmitGate(Inner(), Step(id="s1", goal="g"), 30, max_blocks=1)
+    calls = []
+    gate.senior, gate.senior_left = (lambda s, report: calls.append(report) or "restart case broken"), 1
+    assert "missing evidence" in gate.execute({"command": "submit"})["output"]  # uses the one check send-back
+    assert "restart case broken" in gate.execute({"command": "submit"})["output"]  # the review still runs
+    with pytest.raises(Submitted):
+        gate.execute({"command": "submit"})
+    assert calls == ["done"]

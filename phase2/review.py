@@ -29,7 +29,9 @@ Check the work against every requirement the task states: behaviours, scenarios 
 (restarts, failures, concurrency, limits, empty or dirty input), exact output formats and paths, performance
 limits, and how the tests will run it (possibly as a non-root user, in a fresh shell, without the services the
 colleague started). Look for requirements they skipped, misread or only half met, and for claims their
-transcript does not back up.
+transcript does not back up. When the task sets several targets that pull against each other (for example
+precision and recall, speed and correctness), weigh them all: never ask for a change that fixes one target by
+breaking another, and say in the fix how to keep both.
 {explore}
 Then reply with only JSON: {{"verdict": "ship" | "fix", "problems": [{{"what": "<the concrete problem>",
 "evidence": "<the task text or output that shows it>", "fix": "<what to change>"}}]}}
