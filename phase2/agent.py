@@ -36,7 +36,7 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "d1_python", "d1_model", "d1_revision", "single_step_tier", "planner_role",
                "helper_policy", "helper_step_limit", "max_delegations", "max_parallel_helpers",
                "senior_reviewer_model", "senior_review_rounds", "senior_review_explore", "senior_verify",
-               "senior_fix_model", "senior_fix_step_limit")
+               "senior_fix_model", "senior_fix_step_limit", "measure_targets")
 
 
 class RoutedHarness(BaseAgent):
@@ -138,7 +138,7 @@ class RoutedHarness(BaseAgent):
                     diff = current_diff(20000)
                     verdict, probs, n = senior_review(ask, instruction, report, attempt_digest(messages, 5000),
                                                       diff, explore, self.cfg.senior_review_explore,
-                                                      transcript=st["transcript"])
+                                                      transcript=st["transcript"], evidence=self.cfg.measure_targets)
                     st["problems"], st["mark"] = probs, len(messages)
                     trace.log("senior_review", step=step.id, model=model, verdict=verdict, problems=probs,
                               explored=n, round=1, diff_chars=len(diff))

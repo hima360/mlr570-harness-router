@@ -1305,3 +1305,36 @@ def test_chat_resumes_a_cli_session_with_only_new_turns(monkeypatch):
     msgs += [{"role": "assistant", "content": "reply"}, {"role": "user", "content": "$ ls\nout"}]
     llm.chat(cfg, led, "droid/claude-opus-5-5", msgs, session=sess)
     assert sent == [["review this"], ["$ ls\nout"]]
+
+
+def test_v25_worker_must_measure_targets_and_reviewer_must_cite_evidence():
+    from phase2.planner import Step
+    from phase2.review import senior_review
+
+    seen = []
+    senior_review(lambda m: (seen.append(m[0]["content"]), '{"verdict": "ship", "problems": []}')[1],
+                  "TASK", "done", "-", "", evidence=True)
+    senior_review(lambda m: (seen.append(m[0]["content"]), '{"verdict": "ship", "problems": []}')[1],
+                  "TASK", "done", "-", "")
+    assert "Back every problem with evidence" in seen[0] and "Back every problem" not in seen[1]
+    assert seen[0].index("Back every problem") < seen[0].index("Then reply with only JSON")
+
+    goals = []
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nok\n", 0))
+
+    async def main(cfg):
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = _scripted_model([f"printf '{SUBMIT}\\nok\\n'"])
+        orig = model.query
+
+        def query(messages, **kw):
+            goals.append(messages[1]["content"])
+            return orig(messages, **kw)
+
+        model.query = query
+        return await asyncio.to_thread(run_worker, cfg, None, "zai/glm-5.3-flash", adapter, task_overall="T",
+                                       step=Step(id="s1", goal="g"), blackboard_text="-", model=model)
+
+    asyncio.run(main(load_config(measure_targets=True)))
+    asyncio.run(main(load_config()))
+    assert "MEASURE WHAT THE TASK PROMISES" in goals[0] and "MEASURE WHAT THE TASK PROMISES" not in goals[1]

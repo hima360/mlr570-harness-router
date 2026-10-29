@@ -104,6 +104,9 @@ class HarnessConfig:
     # (ev8 vs ev7, same 10 runs) it solved the same 5/10 for 1.69M more credits, and the second look judged a
     # problem fixed that the hidden tests still failed.
     senior_verify: bool = False
+    # v2.5: the worker must measure the task's stated targets the way its tests would and report the numbers; the
+    # senior reviewer must back every problem with evidence (phase2.worker.MEASURE_HINT, phase2.review.EVIDENCE_RULE).
+    measure_targets: bool = False
     senior_fix_model: str = ""
     senior_fix_step_limit: int = 25
     helper_policy: str = "laya"

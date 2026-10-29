@@ -41,6 +41,8 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "leadsonnet": ("fixed:1", BASE, "configs/phase2-droid-lead.json"),
     # Sonnet builds, Opus reviews on submit (configs/phase2-droid-review.json = the eval config + senior reviewer).
     "review": ("fixed:1", BASE, "configs/phase2-droid-review.json"),
+    # v2.5: v2 plus measure-the-targets (worker) and evidence-backed review (reviewer).
+    "review25": ("fixed:1", BASE, "configs/phase2-droid-review25.json"),
 }
 
 

@@ -38,6 +38,19 @@ printf '""" + SUBMIT + """\\n<one or two sentences on what you did and which fil
 """
 
 
+# 2026-10-29: in 3 of v2's 4 failed runs the worker claimed a target it never measured (precision and recall, latency
+# from process start, fixes never run end to end), and the hidden tests failed exactly there.
+MEASURE_HINT = """
+
+MEASURE WHAT THE TASK PROMISES. If the task states measurable requirements (a latency or time limit, accuracy,
+precision or recall targets, counts, "no duplicates", "never missed", resource limits), then before you submit,
+write and run a check for each one that measures it the way the task's own tests would: from a fresh process,
+through the real entry point, including the failure and restart cases the task names, possibly as a non-root user.
+Where the true answer is unknown (no labels), build the best estimate you can (a hand-checked sample, a synthetic
+case with a known answer). Fix what misses its target, then end your submit message with one line per target:
+target -> measured value -> the command that measured it. If you cannot measure one, say so plainly."""
+
+
 def outputs_hint(step) -> str:
     """How to publish results: name=value lines in the step's outputs.txt, via a quoted heredoc (no
     printf quoting or % pitfalls), plus the facts and files the plan promised."""
@@ -311,6 +324,8 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
     writes_hint = f" (planned: {', '.join(step.writes)})" if step.writes else ""
     text_based = isinstance(model, LitellmTextbasedModel) or complete_fn_for(model_id) is not None
     format_hint = TEXT_FORMAT_HINT if text_based else ""
+    if cfg.measure_targets:
+        step = step.model_copy(update={"goal": step.goal + MEASURE_HINT})
     env = env_adapter
     if run_helpers is not None:
         from .delegate import DelegatingEnv, lead_hint

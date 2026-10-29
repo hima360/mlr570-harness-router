@@ -120,6 +120,15 @@ def senior_verify(ask, messages: list[dict], problems: list[dict], report: str, 
     return [], n
 
 
+EVIDENCE_RULE = """
+Back every problem with evidence: a measured number, a command and its output, or the exact line of code. Where
+the colleague reported measurements, check that they measured the way the task's tests would (from a fresh
+process, the real entry point, the failure cases the task names); an unmeasured or wrongly measured target is a
+problem. Do not ask for a change that trades one stated target for another (for example stricter matching for
+precision) unless your evidence shows the other target still holds after it. A concern you cannot back with
+evidence is not a problem; leave it out."""
+
+
 def parse_review(reply: str) -> tuple[str, list[dict]]:
     """("ship" | "fix", problems). Anything unparsable ships: a broken review must not block the work."""
     m = re.search(r"\{.*\}", reply or "", re.S)
@@ -144,7 +153,7 @@ def problems_text(probs: list[dict], reviewer: str) -> str:
 
 
 def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=None, max_explore: int = 0,
-                  transcript: list | None = None):
+                  transcript: list | None = None, evidence: bool = False):
     """`ask(messages) -> reply` is the reviewer model; `explore(command) -> output` runs a read-only command.
     Returns (verdict, problems, n_explored); `transcript`, when given, receives the review conversation so the
     second look (senior_verify) can continue it."""
@@ -153,6 +162,8 @@ def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=N
     prompt = SENIOR_PROMPT.format(task=task[:6000], report=report[:1500] or "(none)", digest=digest or "(none)",
                                   diff=diff or "(no changes found, or no starting copy to compare with)",
                                   explore=EXPLORE_NOTE.format(n=max_explore) if explore and max_explore else "")
+    if evidence:  # v2.5: the rule goes before the reply format, after the checklist
+        prompt = prompt.replace("\nThen reply with only JSON", EVIDENCE_RULE + "\nThen reply with only JSON", 1)
     messages, n = [{"role": "user", "content": prompt}], 0
     for _ in range(max_explore + 2):
         reply = ask(messages)
