@@ -350,7 +350,10 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
             t.append(f"  {extra}", style="dim")
         return t
 
-    if plan:
+    if plan and plan.get("planner") == "skipped":
+        out.append(head("PLANNER", "none", "one agent does the whole task"))
+        out.append(Text(""))
+    elif plan:
         who = pretty_model(plan.get("planner_model") or cfg.get("planner_model", "planner"))
         took = f"{sum(c.get('ms', 0) for c in pcalls) / 1000:.0f}s" if pcalls else ""
         out.append(head("PLANNER", who, took))
@@ -715,8 +718,11 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         return rows
     steps = plan.get("steps", [])
     planner = pretty_model(plan.get("planner_model") or cfg.get("planner_model", "?"))
-    rows.append(("plan", Text.assemble(("Planner: ", "bold magenta"), (planner, "bold"),
-                                       f" split the task into {len(steps)} step{'s' if len(steps) != 1 else ''}"), []))
+    if plan.get("planner") == "skipped":  # single-agent setups (baselines, build-then-review): no planner call
+        rows.append(("plan", Text.assemble(("Plan: ", "bold magenta"), "no planner; one agent does the whole task"), []))
+    else:
+        rows.append(("plan", Text.assemble(("Planner: ", "bold magenta"), (planner, "bold"),
+                                           f" split the task into {len(steps)} step{'s' if len(steps) != 1 else ''}"), []))
     for s in steps:
         sid = s["id"]
         route = next((e for e in events if e.get("event") == "route" and e.get("step") == sid), None)
@@ -748,6 +754,7 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         esc_model = tiers[esc["to_tier"]] if esc and tiers and esc.get("to_tier", 99) < len(tiers) else ""
         handoff = next((e for e in events if e.get("event") == "handoff" and e.get("step") == sid), None)
         helper_names, helpers = cfg.get("helper_models") or {}, helper_states(events, sid)
+        reviews = [e for e in events if e.get("event") == "senior_review" and e.get("step") == sid]
         for n, msgs in _attempt_files(workers, sid):
             if n > 1 and esc:
                 children.append((f"{sid}/esc", Text.assemble(
@@ -765,6 +772,8 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                 handed = parse_delegate(cmd or "", list(helper_names)) if helper_names else None
                 kids = [helper_node(f"{sid}/a{n}/t{k}", helpers.pop(0), workers) for _ in (handed or []) if helpers]
                 turns.append((f"{sid}/a{n}/t{k}", turn_summary(thought, cmd, ok), kids))
+                if reviews and nxt is not None and "senior reviewer" in str(nxt.get("content") or ""):
+                    turns.append(review_node(f"{sid}/a{n}/r{k}", reviews.pop(0)))  # the review sent this submit back
             head = Text.assemble(("Lead: " if helper_names else "Worker: ", "bold blue"), (model, "bold"),
                                  " (second try, one tier up)" if n > 1 else "")
             children.append((f"{sid}/a{n}", head, turns or [(f"{sid}/a{n}/start", Text("Starting …", style="yellow"), [])]))
@@ -796,6 +805,19 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
     elif done:
         rows.append(("done", Text("All steps finished; Terminal-Bench is grading the result …", style="yellow"), []))
     return rows
+
+def review_node(key: str, r: dict) -> tuple:
+    """The senior reviewer's verdict on a submit, with the problems it sent back."""
+    probs = r.get("problems") or []
+    who = pretty_model(r.get("model", ""))
+    if r.get("verdict") == "fix":
+        head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"),
+                             f" read the task, the transcript and the diff, and sent the work back with {len(probs)} problem(s)")
+    else:
+        head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"), " approved the work")
+    return (key, head, [(f"{key}/p{i}", Text(_short(p.get("what"), 150), style="yellow"), [])
+                        for i, p in enumerate(probs)])
+
 
 def helper_node(parent: str, h: dict, workers: dict[str, list]) -> tuple:
     """A helper under the lead's turn that handed it its sub-task: its turns, then its report."""
