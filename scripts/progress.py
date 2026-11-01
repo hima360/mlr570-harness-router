@@ -17,6 +17,9 @@ from phase2.results import prefixes, progress  # noqa: E402
 
 def render(prefix: str) -> str:
     p = progress(ROOT, prefix)
+    if not p["rows"] and not p["total"]:
+        latest = next((x for x in prefixes(ROOT) if x != prefix), None)
+        return f"{prefix}: not started yet." + (f"\n\nLatest evaluation:\n{render(latest)}" if latest else "")
     eta = time.strftime("%H:%M", time.localtime(p["eta"])) if p["eta"] else "-"
     lines = [f"{prefix}: {p['done']}/{p['total']} runs done, {p['running']} running, {p['queued']} queued; "
              f"finish about {eta}"]
