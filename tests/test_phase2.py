@@ -1672,3 +1672,38 @@ def test_tui_shows_the_way_of_working():
                                "targets": ["CTR >= 2.2%"], "risks": []}])
     assert rows[0][1].plain == "Way of working: Reach a measurable target by experimenting — a CTR target"
     assert [k[1].plain for k in rows[0][2]] == ["target: CTR >= 2.2%"]
+
+
+def test_local_task_wraps_a_folder_and_applies_only_on_request(tmp_path):
+    import subprocess
+
+    from phase2 import local as L
+
+    proj = tmp_path / "proj"
+    (proj / "node_modules").mkdir(parents=True)
+    (proj / "calc.py").write_text("x = 1\n")
+    (proj / "node_modules" / "big.js").write_text("junk")
+    task = L.make_task(proj, "make x 2", tmp_path / "task", check="python -m unittest -q", image="python:3.12-slim")
+    assert (task / "environment/project/calc.py").exists() and not (task / "environment/project/node_modules").exists()
+    assert "FROM python:3.12-slim" in (task / "environment/Dockerfile").read_text()
+    test = (task / "tests/test.sh").read_text()
+    assert "changes.diff" in test and "python -m unittest -q" in test and "reward.txt" in test
+    assert "make x 2" in (task / "instruction.md").read_text()
+    assert "NO" not in L.make_task(proj, "t", tmp_path / "t2").joinpath("tests/test.sh").read_text().split("\n")[0]
+
+    lines = L.status_lines([{"event": "strategy", "mode": "build", "why": "a bug fix"},
+                            {"event": "senior_review", "round": 1, "problems": [{"what": "empty case"}]}], 0)
+    assert lines == ["Way of working: Build or fix software. a bug fix", "Review: sent back 1 problem(s): empty case"]
+
+    subprocess.run(["git", "init", "-q"], cwd=proj, check=True)
+    diff = "--- a/calc.py\n+++ b/calc.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+    assert L.apply_diff(proj, diff) == "applied" and (proj / "calc.py").read_text() == "x = 2\n"
+    assert L.apply_diff(proj, diff).startswith("not applied")  # already applied: conflict, nothing changed
+    assert L.apply_diff(proj, "") == "nothing to apply"
+
+
+def test_local_dockerfile_keeps_the_ignore_list_on_one_line():
+    from phase2 import local as L
+
+    line = next(l for l in L.DOCKERFILE.format(image="x").splitlines() if "info/exclude" in l)
+    assert "*.pyc" in line and "\\n" in line  # a real newline would break the Dockerfile
