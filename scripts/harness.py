@@ -1,6 +1,7 @@
 """One entry point for people (./harness from the repo root):
 
   ./harness run "fix the failing login test" ~/my-project --check "pytest -q"   your task, your folder
+  ./harness try                                                             try it on a tiny bundled project
   ./harness doctor                                                          what is set up, what is missing
   ./harness tui                                                             the live view (same as Harness.command)
   ./harness status [prefix]                                                 how far an evaluation is
@@ -25,6 +26,12 @@ def cmd_run(a) -> int:
     from phase2 import local as L
     from phase2.setups import SETUPS
 
+    folder = Path(a.folder).expanduser()
+    if not folder.is_dir():
+        print(f"There is no folder at {folder.resolve()}.\nGive the path of the project to work on, for example:\n"
+              f'  ./harness run "fix the failing test" ~/Developer/some-project --check "pytest -q"\n'
+              f"Or try it on the bundled example first: ./harness try")
+        return 2
     if a.setup not in SETUPS:
         print(f"unknown setup {a.setup!r}; choose from: {', '.join(SETUPS)}")
         return 2
@@ -111,6 +118,7 @@ def main(argv=None) -> int:
                                                           "how to work and reviews); 'opus' = Opus alone")
     r.add_argument("--image", default="ubuntu:24.04", help="the sandbox's base image, e.g. python:3.12")
     r.add_argument("--apply", action="store_true", help="apply the changes without asking")
+    sub.add_parser("try", help="try it on a tiny bundled project with one bug (examples/average-bug)")
     sub.add_parser("doctor", help="check the setup")
     sub.add_parser("tui", help="open the live view")
     s = sub.add_parser("status", help="how far an evaluation is")
@@ -120,6 +128,17 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "run":
         return cmd_run(a)
+    if a.cmd == "try":
+        import shutil
+        import tempfile
+
+        demo = Path(tempfile.mkdtemp(prefix="harness-try-")) / "average-bug"
+        shutil.copytree(ROOT / "examples" / "average-bug", demo)
+        subprocess.run(["git", "init", "-q"], cwd=demo)
+        print(f"Trying it on a copy of examples/average-bug at {demo}\n")
+        return cmd_run(argparse.Namespace(
+            instruction="average() crashes on an empty list; make it return 0.0 as documented.", folder=str(demo),
+            check="python -m unittest -q", setup="glmreview27", image="python:3.12-slim", apply=False))
     if a.cmd == "doctor":
         return cmd_doctor(a)
     if a.cmd == "tui":

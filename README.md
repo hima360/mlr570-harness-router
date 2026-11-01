@@ -87,6 +87,7 @@ Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence 
 
 | To | Do |
 |---|---|
+| Try it on a tiny bundled project | `./harness try` |
 | Give it your own task on your own folder | `./harness run "fix the failing login test" ~/my-project --check "pytest -q"` (works on a copy in a sandbox, shows the diff, asks before applying) |
 | Check the setup | `./harness doctor` |
 | Watch runs, compare results, start a run | double-click `Harness.command` (keys: `n` new run, `c` compare, `/` filter, `?` help) |
