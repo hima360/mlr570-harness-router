@@ -153,7 +153,7 @@ def problems_text(probs: list[dict], reviewer: str) -> str:
 
 
 def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=None, max_explore: int = 0,
-                  transcript: list | None = None, evidence: bool = False):
+                  transcript: list | None = None, evidence: bool = False, focus: str = ""):
     """`ask(messages) -> reply` is the reviewer model; `explore(command) -> output` runs a read-only command.
     Returns (verdict, problems, n_explored); `transcript`, when given, receives the review conversation so the
     second look (senior_verify) can continue it."""
@@ -164,6 +164,8 @@ def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=N
                                   explore=EXPLORE_NOTE.format(n=max_explore) if explore and max_explore else "")
     if evidence:  # v2.5: the rule goes before the reply format, after the checklist
         prompt = prompt.replace("\nThen reply with only JSON", EVIDENCE_RULE + "\nThen reply with only JSON", 1)
+    if focus:  # v2.7: what matters most for this kind of work (phase2.strategy.REVIEW_FOCUS)
+        prompt = prompt.replace("\nThen reply with only JSON", f"\nFor this kind of work: {focus}\nThen reply with only JSON", 1)
     messages, n = [{"role": "user", "content": prompt}], 0
     for _ in range(max_explore + 2):
         reply = ask(messages)

@@ -877,6 +877,7 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
     else:
         rows.append(("plan", Text.assemble(("Planner: ", "bold #b6a0e0"), (planner, "bold"),
                                            f" split the task into {len(steps)} step{'s' if len(steps) != 1 else ''}"), []))
+    rows += strategy_rows(events)
     for s in steps:
         sid = s["id"]
         route = next((e for e in events if e.get("event") == "route" and e.get("step") == sid), None)
@@ -965,6 +966,24 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
     elif done:
         rows.append(("done", Text("All steps finished; Terminal-Bench is grading the result …", style="#e2b55c"), []))
     return rows
+
+def strategy_rows(events: list[dict]) -> list[tuple]:
+    """v2.7: how the run decided to work (phase2.strategy), with the brief it gave the worker."""
+    from .strategy import MODES
+
+    out = []
+    for e in (e for e in events if e.get("event") == "strategy"):
+        head = Text()
+        head.append("Way of working: ", style=f"bold {ACCENT}")
+        head.append(MODES.get(e.get("mode"), (e.get("mode"), ""))[0], style="bold")
+        if e.get("why"):
+            head.append(f" — {_short(e['why'], 90)}", style=MUTED)
+        kids = [(f"strategy/{e.get('step')}/{k}/{i}", Text(f"{label}: {_short(x, 110)}", style=MUTED), [])
+                for k, label in (("deliverables", "must exist"), ("targets", "target"), ("risks", "risk"))
+                for i, x in enumerate(e.get(k) or [])]
+        out.append((f"strategy/{e.get('step')}", head, kids))
+    return out
+
 
 def review_node(key: str, r: dict) -> tuple:
     """The senior reviewer's verdict on a submit, with the problems it sent back."""

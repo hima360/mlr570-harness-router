@@ -1572,3 +1572,103 @@ def test_partial_credit_uses_the_tasks_own_score(tmp_path):
     assert tests_fraction(trial("weighted", {"ctrf.json": one_test, "reward_details.json": {"checks": checks}})) == 0.75
     assert tests_fraction(trial("plain", {"ctrf.json": {"results": {"summary": {"passed": 3, "tests": 4}}}})) == 0.75
     assert tests_fraction(trial("partial", {"reward.json": {"reward": 0, "partial_score": 0.4}})) == 0.4
+
+
+def test_v27_strategy_parse_text_and_fallback():
+    from phase2.strategy import MODES, choose_strategy, parse_strategy, strategy_text, triage_prompt
+
+    assert all(k in triage_prompt("T") for k in MODES)
+    s = parse_strategy('ok {"mode": "experiment", "why": "a CTR target", "deliverables": ["/app/config.json"], '
+                       '"targets": ["CTR >= 2.2%"], "risks": ["measuring on the wrong split"]}')
+    assert s["mode"] == "experiment" and s["parsed"] and s["targets"] == ["CTR >= 2.2%"]
+    text = strategy_text(s, 80, 45)
+    assert "WORK MODE: Reach a measurable target" in text and "- CTR >= 2.2%" in text
+    assert "80 commands and 45 minutes" in text and "Deliver first" in text
+    assert parse_strategy('{"mode": "dance"}')["mode"] == "build" and not parse_strategy("no json")["parsed"]
+    failed = choose_strategy(lambda m: 1 / 0, "T")
+    assert failed["mode"] == "build" and "ZeroDivisionError" in failed["error"]
+
+
+def test_v27_review_gets_the_modes_focus():
+    from phase2.review import senior_review
+
+    seen = []
+    senior_review(lambda m: (seen.append(m[0]["content"]), '{"verdict": "ship", "problems": []}')[1],
+                  "TASK", "done", "-", "", focus="Re-derive two answers.")
+    assert "For this kind of work: Re-derive two answers." in seen[0]
+    assert seen[0].index("Re-derive") < seen[0].index("Then reply with only JSON")
+
+
+def test_v27_checkpoint_gets_a_review_and_keeps_working():
+    """At the checkpoint the harness submits for an unreviewed worker; the review's problems come back as the next
+    observation; a clean review lets the worker carry on instead of ending its run."""
+    from phase2.planner import Step
+
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nok\n", 0) if SUBMIT in cmd else ("ok\n", 0))
+    seen, reviews = [], []
+
+    async def main(review_says):
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = _scripted_model(["echo 1", "echo 2", "echo 3", "echo 4", f"printf '{SUBMIT}\\nok\\n'"])
+        orig = model.query
+
+        def query(messages, **kw):
+            seen.append(messages[-1]["content"])
+            return orig(messages, **kw)
+
+        model.query = query
+        cfg = load_config(clock=True, checkpoint_frac=0.4, worker_step_limit=6,
+                          senior_reviewer_model="anthropic/claude-opus-5-5")
+        return await asyncio.to_thread(
+            run_worker, cfg, None, "zai/glm-5.3-flash", adapter, task_overall="T", step=Step(id="s1", goal="g"),
+            blackboard_text="-", model=model, senior=lambda s, report, msgs: reviews.append(report) or review_says)
+
+    res = asyncio.run(main("the output file is empty"))
+    assert res.exit_status == "Submitted" and len(reviews) == 1 and reviews[0].startswith("(No report: the harness")
+    assert any("had your work reviewed" in m and "the output file is empty" in m for m in seen)
+    seen.clear(); reviews.clear()
+    res = asyncio.run(main(""))
+    assert res.exit_status == "Submitted" and len(reviews) == 1  # the worker's own submit is not reviewed again
+    assert any("found no blocking problem" in m for m in seen)
+
+
+def test_v27_harness_picks_a_mode_and_briefs_the_worker(tmp_path, monkeypatch):
+    import types
+
+    import phase2.agent as A
+
+    got = {}
+
+    def fake_run_worker(cfg, ledger, model_id, adapter, *, step, senior=None, **kw):
+        got["goal"] = step.goal
+        senior(step, "done", [])
+        return WorkerResult("Submitted", "ok", 1)
+
+    prompts = []
+
+    def fake_chat(cfg, ledger, model, msgs, on_call=None, **kw):
+        prompts.append(msgs[0]["content"])
+        if "Pick the one work mode" in msgs[0]["content"]:
+            return '{"mode": "answer", "why": "exact positions", "targets": ["positions match exactly"]}'
+        return '{"verdict": "ship", "problems": []}'
+
+    monkeypatch.setattr(A, "run_worker", fake_run_worker)
+    monkeypatch.setattr(A, "chat", fake_chat)
+    agent = A.RoutedHarness(logs_dir=tmp_path, model_name=None, policy="fixed:1", max_plan_steps="1",
+                            senior_reviewer_model="anthropic/claude-opus-5-5",
+                            strategy_model="anthropic/claude-opus-5-5")
+    asyncio.run(agent.run("find the positions", FakeEnvironment(lambda c: ("/app\n", 0)),
+                          types.SimpleNamespace(metadata=None)))
+    assert "WORK MODE: Work out exact answers" in got["goal"] and "positions match exactly" in got["goal"]
+    assert "Re-derive at least two" in prompts[-1] and "Back every problem with evidence" in prompts[-1]
+    events = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    assert next(e for e in events if e["event"] == "strategy")["mode"] == "answer"
+
+
+def test_tui_shows_the_way_of_working():
+    from phase2 import tui
+
+    rows = tui.strategy_rows([{"event": "strategy", "step": "s1", "mode": "experiment", "why": "a CTR target",
+                               "targets": ["CTR >= 2.2%"], "risks": []}])
+    assert rows[0][1].plain == "Way of working: Reach a measurable target by experimenting — a CTR target"
+    assert [k[1].plain for k in rows[0][2]] == ["target: CTR >= 2.2%"]

@@ -37,7 +37,7 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "helper_policy", "helper_step_limit", "max_delegations", "max_parallel_helpers",
                "senior_reviewer_model", "senior_review_rounds", "senior_review_explore", "senior_verify",
                "senior_fix_model", "senior_fix_step_limit", "measure_targets", "clock",
-               "wrap_up_frac")
+               "wrap_up_frac", "strategy_model", "checkpoint_frac")
 
 
 class RoutedHarness(BaseAgent):
@@ -99,6 +99,8 @@ class RoutedHarness(BaseAgent):
                 digest = ""
             return result, outputs, digest
 
+        from .strategy import REVIEW_FOCUS
+
         reviews = {}  # step id -> the reviewer's conversation, its problems, what is still open
 
         def current_diff(limit):
@@ -139,7 +141,9 @@ class RoutedHarness(BaseAgent):
                     diff = current_diff(20000)
                     verdict, probs, n = senior_review(ask, instruction, report, attempt_digest(messages, 5000),
                                                       diff, explore, self.cfg.senior_review_explore,
-                                                      transcript=st["transcript"], evidence=self.cfg.measure_targets)
+                                                      transcript=st["transcript"],
+                                                      evidence=self.cfg.measure_targets or bool(self.cfg.strategy_model),
+                                                      focus=REVIEW_FOCUS.get(strategies.get(step.id, {}).get("mode"), ""))
                     st["problems"], st["mark"] = probs, len(messages)
                     trace.log("senior_review", step=step.id, model=model, verdict=verdict, problems=probs,
                               explored=n, round=1, diff_chars=len(diff))
@@ -188,7 +192,31 @@ class RoutedHarness(BaseAgent):
                                 (result.summary + " | senior fix: " + fixed.summary).strip(" |"),
                                 result.n_calls + fixed.n_calls, result.session)
 
+        strategies = {}  # step id -> the work mode and brief (phase2.strategy)
+
+        def plan_work(step):
+            """v2.7: one call picks how to work on this step; the worker reads the mode's playbook and the brief."""
+            from .strategy import choose_strategy, strategy_text
+
+            if step.id not in strategies:
+                model = self.cfg.strategy_model
+
+                def ask(msgs):
+                    with report_failures(lambda info: trace.log("llm_call_failed", role="strategist", step=step.id,
+                                                                **info)):
+                        return chat(self.cfg, ledger, model, msgs,
+                                    on_call=lambda info: trace.log("llm_call", role="strategist", step=step.id, **info))
+
+                strategies[step.id] = choose_strategy(ask, step.goal if len(step.goal) > len(instruction) // 2
+                                                      else f"{instruction}\n\nYOUR PART: {step.goal}")
+                trace.log("strategy", step=step.id, model=model, **strategies[step.id])
+            limit = step.worker_step_limit or self.cfg.worker_step_limit
+            minutes = (step.wall_time_sec or self.cfg.step_wall_time_sec) // 60
+            return step.model_copy(update={"goal": step.goal + strategy_text(strategies[step.id], limit, minutes)})
+
         def work(step, model_id, blackboard_text, output_path):
+            if self.cfg.strategy_model:
+                step = plan_work(step)
             helpers = None
             if self.cfg.helper_models:
                 helpers = make_helper_runner(self.cfg, ledger, adapter, trace, step, model_id, instruction,

@@ -32,4 +32,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "glmreview25": ("fixed:1", BASE, "configs/phase2-droid-glm-review25.json"),
     # v2.6: v2.5 plus the clock (time and commands used after every command, wrap up at 70%).
     "glmreview26": ("fixed:1", BASE, "configs/phase2-droid-glm-review26.json"),
+    # v2.7: v2.6 plus a work mode and brief before work (phase2.strategy) and a review checkpoint at 85% of the budget.
+    "glmreview27": ("fixed:1", BASE, "configs/phase2-droid-glm-review27.json"),
 }

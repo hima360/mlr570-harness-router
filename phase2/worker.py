@@ -108,17 +108,25 @@ class SubmitGate:
                             "returncode": 1, "exception_info": ""}
             # The senior review has its own rounds: other send-backs must not use them up (2026-10-29: a value
             # reviewer sent payments back three times on note-keeping and the senior review never ran).
+            report = ((done.messages[0] if done.messages else {}) or {}).get("content", "")
+            checkpoint = report.startswith(CHECKPOINT_MARK)
             if self.senior and self.senior_left > 0:
                 self.senior_left -= 1
-                report = ((done.messages[0] if done.messages else {}) or {}).get("content", "")
                 problem = self.senior(self.step, report)
                 if problem:
-                    return {"output": f"NOT DONE YET: {problem}\nFix them, then submit again.", "returncode": 1,
+                    head = "The harness had your work reviewed before your budget runs out. " if checkpoint else ""
+                    return {"output": f"{head}NOT DONE YET: {problem}\nFix them, then submit again.", "returncode": 1,
                             "exception_info": ""}
+            if checkpoint:  # the worker never said it was done: a clean review is feedback, not the end
+                return {"output": "A reviewer looked at your work so far and found no blocking problem. Finish what "
+                                  "you were doing and submit.", "returncode": 0, "exception_info": ""}
             raise
 
     def __getattr__(self, name):
         return getattr(self.inner, name)
+
+
+CHECKPOINT_MARK = "(No report: the harness submitted"
 
 
 class ClockEnv:
@@ -126,12 +134,19 @@ class ClockEnv:
     the worker to finish and submit (and again at 90%), so its submit and the senior review happen before a limit
     ends the step unreviewed. `calls()` is the agent's model-call count, which mini-swe-agent's step limit counts."""
 
-    def __init__(self, inner, calls, step_limit: int, wall_sec: int, wrap_frac: float = 0.7, clock=None):
+    def __init__(self, inner, calls, step_limit: int, wall_sec: int, wrap_frac: float = 0.7, clock=None,
+                 checkpoint_frac: float = 0.0, checkpoint_ok=None):
         import time
 
         self.inner, self.calls, self.step_limit, self.wall_sec = inner, calls, step_limit, wall_sec
         self.wrap_frac, self.clock = wrap_frac, clock or time.monotonic
         self.t0, self.warned = self.clock(), 0.0
+        # v2.7: at checkpoint_frac, submit for the worker once if checkpoint_ok() (it has not been reviewed yet)
+        self.checkpoint_frac, self.checkpoint_ok, self.checkpointed = checkpoint_frac, checkpoint_ok, False
+
+    def used(self) -> float:
+        return max((self.clock() - self.t0) / self.wall_sec if self.wall_sec else 0.0,
+                   self.calls() / self.step_limit if self.step_limit else 0.0)
 
     def note(self) -> str:
         used_s, used_n = self.clock() - self.t0, self.calls()
@@ -149,7 +164,16 @@ class ClockEnv:
         return text
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
+        from minisweagent.exceptions import Submitted
+
         out = self.inner.execute(action, cwd, timeout=timeout)
+        if (self.checkpoint_frac and not self.checkpointed and self.used() >= self.checkpoint_frac
+                and (self.checkpoint_ok is None or self.checkpoint_ok())):
+            self.checkpointed = True
+            report = (f"{CHECKPOINT_MARK} at {self.used():.0%} of the budget so the work is reviewed "
+                      f"while there is budget left to fix it. Last command output: {(out.get('output') or '')[-400:]})")
+            raise Submitted({"role": "exit", "content": report, "extra": {"exit_status": "Submitted",
+                                                                          "submission": report}})
         if note := self.note():
             out = {**out, "output": f"{out.get('output') or ''}\n{note}"}
         return out
@@ -371,12 +395,15 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
         env = DelegatingEnv(env_adapter, cfg.helper_models, run_helpers, cfg.max_delegations,
                             on_return=guard.progress if guard else None)
         step = step.model_copy(update={"goal": step.goal + lead_hint(cfg.helper_models, cfg.max_delegations)})
-    gate = SubmitGate(env, step, cfg.check_timeout, cfg.submit_checks)
     step_limit = step.worker_step_limit or cfg.worker_step_limit
     wall_sec = step.wall_time_sec or cfg.step_wall_time_sec
-    outer = ClockEnv(gate, lambda: agent.n_calls, step_limit, wall_sec, cfg.wrap_up_frac) if cfg.clock else gate
+    if cfg.clock:  # inside the gate: a checkpoint submit is checked and reviewed like the worker's own
+        env = ClockEnv(env, lambda: agent.n_calls, step_limit, wall_sec, cfg.wrap_up_frac,
+                       checkpoint_frac=cfg.checkpoint_frac if senior is not None else 0.0,
+                       checkpoint_ok=lambda: gate.senior_left > 0)
+    gate = SubmitGate(env, step, cfg.check_timeout, cfg.submit_checks)
     agent = DefaultAgent(
-        model, outer,
+        model, gate,
         system_template="You are a careful software engineer operating a Linux shell.",
         instance_template=INSTANCE_TEMPLATE,
         step_limit=step_limit, cost_limit=0, output_path=output_path, wall_time_limit_seconds=wall_sec,

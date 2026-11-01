@@ -112,6 +112,11 @@ class HarnessConfig:
     # GLM-builder runs hit the 45-min or 80-command limit before submitting, and those runs were never reviewed).
     clock: bool = False
     wrap_up_frac: float = 0.7
+    # v2.7 (phase2.strategy): this model picks a work mode and writes a brief before the worker starts ("" = off), and
+    # at checkpoint_frac of the commands or time the harness submits for a worker that has not been reviewed yet, so
+    # the senior review runs with budget left to act on it (0 = off; needs clock and a senior reviewer).
+    strategy_model: str = ""
+    checkpoint_frac: float = 0.0
     senior_fix_model: str = ""
     senior_fix_step_limit: int = 25
     helper_policy: str = "laya"
