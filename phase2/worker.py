@@ -121,6 +121,43 @@ class SubmitGate:
         return getattr(self.inner, name)
 
 
+class ClockEnv:
+    """v2.6: ends every command's output with the time and commands used, and once either passes `wrap_frac`, tells
+    the worker to finish and submit (and again at 90%), so its submit and the senior review happen before a limit
+    ends the step unreviewed. `calls()` is the agent's model-call count, which mini-swe-agent's step limit counts."""
+
+    def __init__(self, inner, calls, step_limit: int, wall_sec: int, wrap_frac: float = 0.7, clock=None):
+        import time
+
+        self.inner, self.calls, self.step_limit, self.wall_sec = inner, calls, step_limit, wall_sec
+        self.wrap_frac, self.clock = wrap_frac, clock or time.monotonic
+        self.t0, self.warned = self.clock(), 0.0
+
+    def note(self) -> str:
+        used_s, used_n = self.clock() - self.t0, self.calls()
+        frac = max(used_s / self.wall_sec if self.wall_sec else 0.0, used_n / self.step_limit if self.step_limit else 0.0)
+        parts = ([f"{used_s / 60:.0f} of {self.wall_sec / 60:.0f} min"] if self.wall_sec else []) + \
+                ([f"{used_n} of {self.step_limit} commands"] if self.step_limit else [])
+        text = f"[Clock] {', '.join(parts)} used." if parts else ""
+        for level, msg in ((0.9, "Submit now with what works; a step the limit ends is never reviewed."),
+                           (self.wrap_frac, "Wrap up: finish the most important open requirement, run your final "
+                                            "check and submit, leaving time for one round of review and a fix; a "
+                                            "step the limit ends is never reviewed.")):
+            if frac >= level and self.warned < level:
+                self.warned = level
+                return f"{text} {msg}"
+        return text
+
+    def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
+        out = self.inner.execute(action, cwd, timeout=timeout)
+        if note := self.note():
+            out = {**out, "output": f"{out.get('output') or ''}\n{note}"}
+        return out
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
 @dataclass
 class WorkerResult:
     exit_status: str  # Submitted | LimitsExceeded | error type
@@ -335,12 +372,14 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
                             on_return=guard.progress if guard else None)
         step = step.model_copy(update={"goal": step.goal + lead_hint(cfg.helper_models, cfg.max_delegations)})
     gate = SubmitGate(env, step, cfg.check_timeout, cfg.submit_checks)
+    step_limit = step.worker_step_limit or cfg.worker_step_limit
+    wall_sec = step.wall_time_sec or cfg.step_wall_time_sec
+    outer = ClockEnv(gate, lambda: agent.n_calls, step_limit, wall_sec, cfg.wrap_up_frac) if cfg.clock else gate
     agent = DefaultAgent(
-        model, gate,
+        model, outer,
         system_template="You are a careful software engineer operating a Linux shell.",
         instance_template=INSTANCE_TEMPLATE,
-        step_limit=step.worker_step_limit or cfg.worker_step_limit, cost_limit=0, output_path=output_path,
-        wall_time_limit_seconds=step.wall_time_sec or cfg.step_wall_time_sec,
+        step_limit=step_limit, cost_limit=0, output_path=output_path, wall_time_limit_seconds=wall_sec,
     )
     if cfg.reviewer_model and model_id != cfg.reviewer_model:
         gate.reviewer = lambda s: review_values(cfg, ledger, s, env_adapter, agent.messages, on_call)

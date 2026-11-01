@@ -1395,3 +1395,48 @@ def test_supervisor_reruns_only_runs_ended_by_infrastructure(tmp_path):
     assert supervise.infra_reason(lost) == "ended by ProviderUnavailable"
     assert supervise.infra_reason(honest) == "" and supervise.infra_reason(limit) == ""
     assert supervise.unfinished(tmp_path / "nothing-here")
+
+
+def test_v26_clock_shows_time_and_commands_and_nudges_once_per_level():
+    from phase2.worker import ClockEnv
+
+    class Inner:
+        def execute(self, action, cwd="", *, timeout=None):
+            return {"output": "out", "returncode": 0}
+
+    now, calls = [0.0], [0]
+    env = ClockEnv(Inner(), lambda: calls[0], step_limit=80, wall_sec=2700, wrap_frac=0.7, clock=lambda: now[0])
+    first = env.execute({"command": "ls"})["output"]
+    assert first == "out\n[Clock] 0 of 45 min, 0 of 80 commands used."
+    calls[0] = 56  # 70% of the commands, time still early
+    assert "Wrap up" in env.execute({})["output"]
+    assert "Wrap up" not in env.execute({})["output"]  # said once
+    now[0] = 2500  # 93% of the time
+    assert "Submit now" in env.execute({})["output"]
+    assert "Submit now" not in env.execute({})["output"]
+
+
+def test_v26_clock_is_wired_only_when_on():
+    from phase2.planner import Step
+
+    seen = []
+    env = FakeEnvironment(lambda cmd: ("hello\n", 0))
+
+    async def main(cfg):
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = _scripted_model(["echo hello", f"printf '{SUBMIT}\\nok\\n'"])
+        orig = model.query
+
+        def query(messages, **kw):
+            seen.append(messages[-1]["content"])
+            return orig(messages, **kw)
+
+        model.query = query
+        return await asyncio.to_thread(run_worker, cfg, None, "zai/glm-5.3-flash", adapter, task_overall="T",
+                                       step=Step(id="s1", goal="g"), blackboard_text="-", model=model)
+
+    asyncio.run(main(load_config(clock=True)))
+    on = list(seen)
+    seen.clear()
+    asyncio.run(main(load_config()))
+    assert any("[Clock]" in m for m in on) and not any("[Clock]" in m for m in seen)

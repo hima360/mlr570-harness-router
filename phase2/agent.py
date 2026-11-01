@@ -36,7 +36,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "d1_python", "d1_model", "d1_revision", "single_step_tier", "planner_role",
                "helper_policy", "helper_step_limit", "max_delegations", "max_parallel_helpers",
                "senior_reviewer_model", "senior_review_rounds", "senior_review_explore", "senior_verify",
-               "senior_fix_model", "senior_fix_step_limit", "measure_targets")
+               "senior_fix_model", "senior_fix_step_limit", "measure_targets", "clock",
+               "wrap_up_frac")
 
 
 class RoutedHarness(BaseAgent):

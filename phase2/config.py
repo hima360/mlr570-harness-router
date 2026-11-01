@@ -107,6 +107,11 @@ class HarnessConfig:
     # v2.5: the worker must measure the task's stated targets the way its tests would and report the numbers; the
     # senior reviewer must back every problem with evidence (phase2.worker.MEASURE_HINT, phase2.review.EVIDENCE_RULE).
     measure_targets: bool = False
+    # v2.6: every command's output ends with the time and commands used; at wrap_up_frac of either, the worker is told
+    # to finish and submit, so the senior review runs with time left for a fix (2026-11-01 held-out: 15 of 36
+    # GLM-builder runs hit the 45-min or 80-command limit before submitting, and those runs were never reviewed).
+    clock: bool = False
+    wrap_up_frac: float = 0.7
     senior_fix_model: str = ""
     senior_fix_step_limit: int = 25
     helper_policy: str = "laya"
