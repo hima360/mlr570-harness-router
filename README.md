@@ -105,6 +105,8 @@ Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence 
 - `n` **New run** has an *Evaluation setup* picker (`opus`, `glm`, `glmreview26`, ...) that fills in the config,
   policy and limits that setup uses in `scripts/run_compare.py` (`phase2/setups.py`).
 - The filter box above the jobs list keeps runs whose name or status has every word typed (`ho4 running`).
+- One design across the TUI, `reports/*.html` and the deck: ink and paper with a terracotta accent and calm
+  status colours (theme `mlr570` in `phase2/tui.py`; Ctrl+P, "Change theme" switches it).
 
 - Sidebar: `+ New run` and every job in `jobs/` (● running, ✓ passed, ✗ failed, ! error, ■ stopped).
 - Main pane: the roles box shows who actually did each job in that run (planner model, router that decided,

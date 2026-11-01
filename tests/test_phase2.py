@@ -1163,7 +1163,7 @@ def test_tui_shows_a_leads_helpers():
     lead_node = rows[1][2][1]
     assert lead_node[1].plain.startswith("Lead: ") and "Helper:" in lead_node[2][0][2][0][1].plain
     panel = tui.progress_panel(events, 8.0).plain
-    assert "helper s1.h1" in panel and "lead 900 credits · helpers 30 credits" in panel
+    assert "helper s1.h1" in panel and "lead $0.00 (900 credits) · helpers $0.00 (30 credits)" in panel
     assert any("HELPER" in l.plain for l in tui.story_lines(events, workers))
     assert any("→ s1.h1" in l.plain for l in tui.activity_lines(events))
 
@@ -1483,8 +1483,21 @@ def test_tui_filter_setup_picker_and_results(tmp_path):
     _fake_eval(tmp_path)
     from phase2 import results as R
 
-    text = tui.results_text(R.progress(tmp_path, "ev9")).plain
-    assert "2/8 runs done" in text and "alpha" in text and "✓" in text and "75%" in text
+    p = R.progress(tmp_path, "ev9")
+    assert "2 of 8 runs done" in tui.results_header(p).plain
+    rows = {r[0].plain: [c.plain for c in r] for r in tui.setup_rows(p)}
+    assert rows["glmreview26"][1] == "1 / 1" and rows["opus"][2] == "75%"
+    styles = {r[0].plain: str(r[0].style) for r in tui.setup_rows(p)}
+    assert "#7fb685" in styles["glmreview26"] and "#7fb685" not in styles["opus"]  # the best setup stands out
+    cols, trows = tui.task_rows(p)
+    assert cols == ["Task", "glmreview26", "opus"] and [c.plain.split() for c in trows[0][1:]] == [["✓", "run"], ["75%"]]
+    label = tui.job_label("ho4-glmreview26-ctr-optimization-r2", "passed").plain
+    assert label.startswith("✓ ctr-optimization") and "ho4 · glmreview26 · r2 · solved" in label
+    assert tui.limits_text({"max_plan_steps": "1", "worker_step_limit": "80", "step_wall_time_sec": "2700"}) == \
+        "1 step · 80 commands · 45 min per step"
+    assert tui.describe_command("cd /app && python3 - <<'EOF' 2>&1\nprint(x > 1)\nEOF") == "ran a Python script"
+    assert tui.describe_command("cat > /app/out.json <<'EOF'\n{}\nEOF") == "wrote /app/out.json"
+    assert tui.describe_command("ls /app 2>/dev/null") == "listed files"
 
     async def drive():
         app = tui.HarnessTUI(root=tmp_path, poll_sec=60)
@@ -1529,3 +1542,14 @@ def test_html_report_marks_best_setup_and_escapes(tmp_path):
     assert "<tr class='best'><td>v2.6</td>" in page and "✓ 100%" in page and "class='b run'" in page
     assert "http" not in page  # nothing loaded from the web
     assert "No finished runs yet" in m.build([], "t", {})
+
+
+def test_tui_task_choices_list_the_dataset(tmp_path):
+    from phase2 import tui
+
+    (tmp_path / "zeta-task").mkdir()
+    (tmp_path / "zeta-task" / "task.toml").write_text("")
+    (tmp_path / "notes").mkdir()
+    choices = tui.task_choices(tmp_path)
+    assert choices[0][1] == "tests/harbor_smoke/hello-file" and choices[-1] == ("tb4: zeta-task", "terminal-bench/zeta-task")
+    assert len(choices) == len(tui.J.TASKS) + 1

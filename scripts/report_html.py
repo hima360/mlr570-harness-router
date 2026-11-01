@@ -21,8 +21,9 @@ from phase2.results import by_setup, collect  # noqa: E402
 CSS = """
 :root { --bg:#f7f5f0; --fg:#14213d; --muted:#5c6779; --line:#d9d3c7; --card:#fffdf8; --good:#2f7d4f;
         --bad:#b84a3a; --accent:#b5651d; --bar:#c98a4b; }
-@media (prefers-color-scheme: dark) { :root { --bg:#121722; --fg:#e8e4da; --muted:#9aa3b2; --line:#2c3444;
-        --card:#1a2130; --good:#5fbf86; --bad:#e07a68; --accent:#e0a060; --bar:#b07a45; } }
+/* dark = the TUI's theme (phase2/tui.py THEME); light = the deck's paper and ink */
+@media (prefers-color-scheme: dark) { :root { --bg:#11161f; --fg:#e6e1d6; --muted:#8b93a7; --line:#1f2838;
+        --card:#161d29; --good:#7fb685; --bad:#e07a68; --accent:#d99a5b; --bar:#d99a5b; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, -apple-system, sans-serif; }
 main { max-width:1100px; margin:0 auto; padding:24px 16px 48px; }

@@ -15,6 +15,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import (Button, DataTable, Footer, Header, Input, Label, ListItem, ListView, RichLog,
                              Select, Static, TabbedContent, TabPane, Tree)
 
@@ -22,14 +23,21 @@ from . import jobs as J
 from . import results as R
 from .setups import SETUPS
 from .delegate import parse_delegate
+from .list_prices import trace_usd
 
 ROOT = Path(__file__).resolve().parents[1]
-STATUS_STYLE = {"running": "bold yellow", "passed": "bold green", "failed": "bold red", "error": "bold red",
+# One design for the TUI, the HTML report and the deck: ink and paper with a terracotta accent, calm status colours.
+OK, BAD, WARN, MUTED, ACCENT = "#7fb685", "#e07a68", "#e2b55c", "#8b93a7", "#d99a5b"
+THEME = Theme(name="mlr570", primary=ACCENT, secondary="#8fb0d9", accent=ACCENT, warning=WARN, error=BAD,
+              success=OK, foreground="#e6e1d6", background="#11161f", surface="#161d29", panel="#1f2838", dark=True)
+STATUS_STYLE = {"running": "bold #e2b55c", "passed": "bold #7fb685", "failed": "bold #e07a68", "error": "bold #e07a68",
                 "stopped": "dim", "incomplete": "dim"}
 STATUS_ICON = {"running": "●", "passed": "✓", "failed": "✗", "error": "!", "stopped": "■", "incomplete": "…"}
-ROLE_STYLE = {"PLANNER": "bold magenta", "ROUTER": "bold cyan", "WORKER": "bold blue", "VERIFIER": "bold green",
-              "ESCALATE": "bold yellow", "DONE": "bold white", "LEAD": "bold blue", "HELPER": "bold dark_orange",
-              "REVIEWER": "bold magenta"}
+STATUS_WORD = {"running": "running", "passed": "solved", "failed": "not solved", "error": "error", "stopped": "stopped",
+               "incomplete": "incomplete"}
+ROLE_STYLE = {"PLANNER": "bold #b6a0e0", "ROUTER": "bold #8fb0d9", "WORKER": "bold #8fb0d9", "VERIFIER": "bold #7fb685",
+              "ESCALATE": "bold #e2b55c", "DONE": "bold #e6e1d6", "LEAD": "bold #8fb0d9", "HELPER": "bold #d99a5b",
+              "REVIEWER": "bold #b6a0e0"}
 LEGACY_ROUTER = {"laya": "Laya (laya_mlx, local MLX)", "arch": "Arch-Router-1.5B (katanemo, local)",
                  "fixed": "fixed policy (no model)", "random": "random policy (no model)"}
 EXIT_REASON = {"StepIdle": "no model reply for too long", "TimeExceeded": "hit the step's time cap",
@@ -55,41 +63,88 @@ def setup_values(setup: str, configs: list[str]) -> dict:
     return out
 
 
-def results_text(p: dict) -> Text:
-    """The Results screen: progress, one line per setup, then each task's runs per setup."""
-    t = Text(f"{p['prefix']}  ", style="bold")
-    eta = time.strftime("%H:%M", time.localtime(p["eta"])) if p.get("eta") else "-"
-    t.append(f"{p['done']}/{p['total']} runs done · {p['running']} running · {p['queued']} queued · "
-             f"finish about {eta}\n\n", style="dim")
-    if not p["setups"]:
-        t.append("No finished runs yet.", style="dim")
-        return t
-    best = max(p["setups"].items(), key=lambda kv: (kv[1]["passed"], -kv[1]["usd"]))[0]
-    t.append(f"{'setup':14s}{'solved':>9s}{'tests':>8s}{'tokens':>9s}{'cost':>9s}{'$/solve':>9s}{'min/run':>9s}"
-             f"{'hit limit':>11s}{'reviewed':>10s}\n", style="bold")
-    for s, a in p["setups"].items():
-        per = "-" if a["passed"] == 0 else f"${a['usd_per_solve']:.2f}"
-        line = (f"{s:14s}{a['passed']:>4d}/{a['runs']:<4d}{a['mean_tests']:>8.0%}{a['tokens'] / 1e6:>8.1f}M"
-                f"{'$' + format(a['usd'], '.2f'):>9s}{per:>9s}{a['minutes_per_run']:>9.0f}"
-                f"{a['limit_hits']:>11d}{a['reviewed']:>10d}\n")
-        t.append(line, style="bold green" if s == best else "")
-    t.append("\nPer task (each run: share of hidden tests passed, ✓ = solved)\n", style="bold")
-    setups = list(p["setups"])
-    cells = {}
-    for r in p["rows"]:
-        mark = "run" if r["status"] != "done" else ("✓" if r["reward"] == 1 else
-                                                    "-" if r["tests"] is None else f"{r['tests']:.0%}")
-        cells.setdefault(r["task"], {}).setdefault(r["setup"], []).append(mark)
-    for task in sorted(cells):
-        t.append(f"{_short(task, 30):31s}", style="")
-        for s in setups:
-            marks = " ".join(cells[task].get(s, []))
-            t.append(f"{s[:12]}: ", style="dim")
-            t.append(f"{marks:12s} ", style="bold green" if "✓" in marks else "")
-        t.append("\n")
-    t.append("\nSolved = all hidden tests pass. Cost = tokens x API list price. Hit limit = ended by the time or "
-             "command limit before submitting. Reviewed = got the senior review.", style="dim")
+def task_choices(dataset: Path = Path.home() / "Developer/harbor-datasets/terminal-bench") -> list[tuple]:
+    """The curated tasks first, then every Terminal-Bench task found in the local dataset copy."""
+    known = {v for _, v in J.TASKS}
+    found = sorted(d.name for d in dataset.iterdir() if (d / "task.toml").exists()) if dataset.is_dir() else []
+    return J.TASKS + [(f"tb4: {t}", f"terminal-bench/{t}") for t in found if f"terminal-bench/{t}" not in known]
+
+
+def job_label(name: str, status: str, reward=None) -> Text:
+    """Sidebar entry: the task on top, then evaluation · setup · repeat · outcome, dimmed."""
+    try:
+        prefix, setup, task, rep = R.split_name(name)
+        top, sub = task, f"{prefix} · {setup} · r{rep}"
+    except ValueError:
+        top, sub = name, ""
+    t = Text()
+    t.append(f"{STATUS_ICON.get(status, '?')} ", style=STATUS_STYLE.get(status, ""))
+    t.append(_short(top, 34), style="bold")
+    word = STATUS_WORD.get(status, status)
+    t.append(f"\n  {sub + ' · ' if sub else ''}{word}", style=MUTED)
     return t
+
+
+def limits_text(caps: dict) -> str:
+    """'1 step · 80 commands · 45 min per step' from a run's caps."""
+    bits = []
+    if caps.get("max_plan_steps"):
+        n = int(caps["max_plan_steps"])
+        bits.append(f"{n} step" + ("s" if n != 1 else "") + (" max" if n > 1 else ""))
+    if caps.get("worker_step_limit"):
+        bits.append(f"{caps['worker_step_limit']} commands")
+    if caps.get("step_wall_time_sec"):
+        bits.append(f"{int(caps['step_wall_time_sec']) // 60} min per step")
+    return " · ".join(bits)
+
+
+def results_header(p: dict) -> Text:
+    eta = time.strftime("%H:%M", time.localtime(p["eta"])) if p.get("eta") else "-"
+    t = Text(f"{p['done']} of {p['total']} runs done", style="bold")
+    t.append(f"   ·   {p['running']} running   ·   {p['queued']} queued   ·   finish about {eta}", style=MUTED)
+    return t
+
+
+SETUP_COLUMNS = ("Setup", "Solved", "Tests passed", "Tokens", "Cost", "Cost per solve", "Min per run",
+                 "Hit a limit", "Reviewed")
+
+
+def setup_rows(p: dict) -> list[tuple]:
+    """One row per setup; the best (most solved, then cheapest) in the success colour."""
+    if not p["setups"]:
+        return []
+    best = max(p["setups"].items(), key=lambda kv: (kv[1]["passed"], -kv[1]["usd"]))[0]
+    rows = []
+    for s, a in p["setups"].items():
+        style = f"bold {OK}" if s == best else ""
+        per = "-" if a["passed"] == 0 else f"${a['usd_per_solve']:.2f}"
+        cells = (s, f"{a['passed']} / {a['runs']}", f"{a['mean_tests']:.0%}", f"{a['tokens'] / 1e6:.1f}M",
+                 f"${a['usd']:.2f}", per, f"{a['minutes_per_run']:.0f}", str(a["limit_hits"]), str(a["reviewed"]))
+        rows.append(tuple(Text(c, style=style, justify="left" if i == 0 else "right") for i, c in enumerate(cells)))
+    return rows
+
+
+def task_rows(p: dict) -> tuple[list[str], list[tuple]]:
+    """Columns (Task + one per setup) and rows: each run's share of hidden tests passed, ✓ when solved."""
+    setups = list(p["setups"]) + sorted({r["setup"] for r in p["rows"]} - set(p["setups"]))
+    cells: dict = {}
+    for r in sorted(p["rows"], key=lambda r: r["repeat"]):
+        cells.setdefault(r["task"], {}).setdefault(r["setup"], []).append(r)
+    rows = []
+    for task in sorted(cells):
+        row = [Text(task)]
+        for s in setups:
+            t = Text()
+            for r in cells[task].get(s, []):
+                if r["status"] != "done":
+                    t.append("run  ", style=WARN)
+                elif r["reward"] == 1:
+                    t.append("✓    ", style=f"bold {OK}")
+                else:
+                    t.append(("-" if r["tests"] is None else f"{r['tests']:.0%}").ljust(5), style=MUTED)
+            row.append(t)
+        rows.append(tuple(row))
+    return ["Task", *setups], rows
 
 
 HELP = """[b]What you are looking at[/b]
@@ -103,6 +158,7 @@ Details / Raw events / Harbor log: tokens and spend, the raw trace, Harbor's own
 n  start a run: pick a task and an evaluation setup (it fills in the config, policy and limits)
 c  compare: results of an evaluation (solved, tests passed, tokens, cost) and how far it is
 /  jump to the filter    s  stop the selected run    r  refresh    ?  this help    q  quit
+Ctrl+P  command palette, including \"Change theme\" (default: mlr570, the same colours as the deck and report)
 
 [b]Words[/b]
 Solved = all of the task's hidden tests pass (Harbor reward 1). Tests passed = share of them that pass.
@@ -205,12 +261,12 @@ def activity_lines(events: list[dict]) -> list[Text]:
             then = "retrying" if e.get("will_retry") else "giving up on this call"
             line = _line(t, e.get("role", "?").upper(), e.get("model", "?"),
                          f"{e.get('step', '')}  {_secs(e.get('ms'))}  ")
-            line.append(f"CALL FAILED: {what}, {then}", style="bold red")
+            line.append(f"CALL FAILED: {what}, {then}", style="bold #e07a68")
             out.append(line)
         elif ev == "attempt":
             check = e.get("check") or ""
             how = f"check `{check[:60]}`" if check else "no check, trusts the worker's submit"
-            verdict = Text("PASS", style="bold green") if e.get("passed") else Text("FAIL", style="bold red")
+            verdict = Text("PASS", style="bold #7fb685") if e.get("passed") else Text("FAIL", style="bold #e07a68")
             line = _line(t, "VERIFIER", "task container",
                          f"{e.get('step')} attempt {e.get('attempt')} by {e.get('model')}: {how} → ")
             line.append(verdict)
@@ -311,11 +367,11 @@ def worker_lines(messages: list[dict], max_obs: int = 1500) -> list[Text]:
         role = m.get("role")
         content = str(m.get("content") or "")
         if role == "assistant":
-            out.append(Text("model ▸ ", style="bold blue") + Text(content.strip()))
+            out.append(Text("model ▸ ", style="bold #8fb0d9") + Text(content.strip()))
         elif role == "exit":
             out.append(Text(f"exit ▸ {m.get('extra', {}).get('exit_status', '')} {content[:300]}", style="bold"))
         else:
-            out.append(Text("shell ◂ ", style="bold green") + Text(content.strip()[:max_obs], style="dim"))
+            out.append(Text("shell ◂ ", style="bold #7fb685") + Text(content.strip()[:max_obs], style="dim"))
         out.append(Text(""))
     return out
 
@@ -357,7 +413,9 @@ def describe_command(cmd: str) -> str:
     """A few words on what a shell command does, for people skimming the run."""
     if SUBMIT_MARK in cmd:
         return "declared the step done"
-    parts = [p.strip() for p in cmd.strip().split("&&")]
+    first_line = cmd.strip().splitlines()[0] if cmd.strip() else ""
+    first_line = re.sub(r"\d?>>?\s*&\d|\d?>>?\s*/dev/null", "", first_line)  # 2>&1, >/dev/null: not files
+    parts = [p.strip() for p in first_line.split("&&")]
     core = next((p for p in parts if not p.startswith("cd ")), parts[-1])  # first real action after any cd
     first = core.split("|")[0].strip()
     tok = first.split()
@@ -382,9 +440,11 @@ def describe_command(cmd: str) -> str:
         "delegate": "handed sub-task(s) to helpers",
     }
     desc = table.get(verb, f"ran {verb}" if verb else "ran a command")
-    if ">" in core and verb in ("echo", "printf", "cat", "python3", "python"):
-        dest = core.rsplit(">", 1)[-1].strip().split()[0] if core.rsplit(">", 1)[-1].strip() else ""
-        desc = f"wrote {dest}" if dest else desc
+    m = re.search(r">>?\s*([\w./~-]+)", core)
+    if m and verb in ("echo", "printf", "cat", "tee"):
+        desc = f"wrote {m.group(1)}"
+    elif verb in ("python3", "python") and "<<" in core:
+        desc = "ran a Python script"
     return desc
 
 
@@ -505,23 +565,23 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
                 if thought:
                     out.append(Text(f"      thinking: {_short(thought, 170)}", style="italic"))
                 if cmd and SUBMIT_MARK not in cmd:
-                    out.append(Text(f"      $ {_short(cmd, 170)}", style="cyan"))
+                    out.append(Text(f"      $ {_short(cmd, 170)}", style="#8fb0d9"))
                 nxt = msgs[i + 1] if i + 1 < len(msgs) else None
                 if nxt and nxt.get("role") == "exit":
-                    out.append(Text(f"      → {_short(nxt.get('content'), 170)}", style="green"))
+                    out.append(Text(f"      → {_short(nxt.get('content'), 170)}", style="#7fb685"))
                 elif nxt and nxt.get("role") != "assistant":
                     ok, summary = summarize_output(str(nxt.get("content") or ""))
-                    out.append(Text(f"      → {summary}", style="green" if ok else "red"))
+                    out.append(Text(f"      → {summary}", style="#7fb685" if ok else "#e07a68"))
                     if nudge := clock_nudge(str(nxt.get("content") or "")):
-                        out.append(Text(f"      CLOCK {nudge}", style="bold yellow"))
+                        out.append(Text(f"      CLOCK {nudge}", style="bold #e2b55c"))
                 elif not nxt:
-                    out.append(Text("      … running", style="yellow"))
+                    out.append(Text("      … running", style="#e2b55c"))
             a = attempts.get(n)
             if a:
                 v = head("VERIFIER", "task container")
                 how = f"ran `{_short(a['check'], 60)}`" if a.get("check") else "no check for this step, accepted the worker's done"
                 v.append(f"  {how} → ")
-                v.append("passed ✔" if a.get("passed") else "failed ✘", style="bold green" if a.get("passed") else "bold red")
+                v.append("passed ✔" if a.get("passed") else "failed ✘", style="bold #7fb685" if a.get("passed") else "bold #e07a68")
                 if a.get("exit_status") not in (None, "Submitted"):
                     v.append(f"  (worker stopped: {a['exit_status']})", style="dim")
                 out.append(v)
@@ -532,15 +592,15 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
             out.append(Text("      → ship it" if v == "ship" else "      → second look: all fixed" if v == "fixed"
                             else f"      → second look: {len(probs)} still open" if v == "open"
                             else f"      → sent back {len(probs)} problem(s)",
-                            style="green" if v in ("ship", "fixed") else "yellow"))
+                            style="#7fb685" if v in ("ship", "fixed") else "#e2b55c"))
             for p in probs:
-                out.append(Text(f"        • {_short(p.get('what'), 160)}", style="yellow"))
+                out.append(Text(f"        • {_short(p.get('what'), 160)}", style="#e2b55c"))
         for h in helper_states(events, sid):
             out.append(head("HELPER", pretty_model(h["model"]), f"{h['id']}, given a sub-task by the lead · "
                             f"{h['calls']} calls · {spend_text(h['spend'])}"))
             out.append(Text(f"      task: {_short(h['task'], 170)}"))
             out.append(Text(f"      → {_short(h['summary'], 170)}" if h["summary"] else "      … working",
-                            style={"done": "green", "failed": "red"}.get(h["state"], "yellow")))
+                            style={"done": "#7fb685", "failed": "#e07a68"}.get(h["state"], "#e2b55c")))
         if esc and not _attempt_files(workers, sid)[1:]:
             out.append(head("ESCALATE", "orchestrator", f"retrying one tier up on {pretty_model(esc_model) or 'the next tier'}"))
         out.append(Text(""))
@@ -555,7 +615,7 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
 # ---------- Overview tab: a plain tree of what happened, no numbers ----------
 
 def first_sentence(text: str, n: int = 100) -> str:
-    text = " ".join((text or "").split())
+    text = " ".join(re.sub(r"</?(thought|thinking)>", " ", text or "").split())  # GLM wraps its thoughts in tags
     if not text:
         return ""
     guarded = re.sub(r"\b(e\.g|i\.e|etc|vs)\.", lambda m: m.group(0).replace(".", "\0"), text)
@@ -568,14 +628,15 @@ def turn_summary(thought: str, cmd: str, ok: bool | None) -> Text:
         return Text("Said the step is finished", style="bold")
     action = describe_command(cmd) if cmd else "answered without running anything"
     action = action[0].upper() + action[1:]
-    t = Text(action, style="bold" if ok is not False else "bold red")
+    t = Text()
+    t.append(action, style="bold")
     why = first_sentence(thought)
     if why:
-        t.append(f" — {why}", style="")
+        t.append(f" — {why}", style=MUTED)
     if ok is False:
-        t.append("  (failed)", style="red")
+        t.append("  ✗ failed", style=BAD)
     elif ok is None:
-        t.append("  … working", style="yellow")
+        t.append("  … working", style="#e2b55c")
     return t
 
 
@@ -647,8 +708,8 @@ def helper_states(events: list[dict], step_id: str) -> list[dict]:
     return out
 
 
-STATE_LOOK = {"done": ("✓", "bold green", "done"), "failed": ("✗", "bold red", "failed"),
-              "working": ("●", "bold yellow", "working"), "retrying": ("●", "bold yellow",
+STATE_LOOK = {"done": ("✓", "bold #7fb685", "done"), "failed": ("✗", "bold #e07a68", "failed"),
+              "working": ("●", "bold #e2b55c", "working"), "retrying": ("●", "bold #e2b55c",
                                                                      "retrying with a stronger model"),
               "waiting": ("○", "dim", "waiting"), "stopped": ("■", "dim", "stopped mid-work")}
 
@@ -672,13 +733,13 @@ def spend(events: list[dict], step_id: str | None = None) -> dict:
     """Model spend from the trace: list-price USD, Factory credits, input tokens and the cached share."""
     calls = [e for e in events if e.get("event") == "llm_call" and (step_id is None or e.get("step") == step_id)]
     inp = sum(e.get("input_tokens") or 0 for e in calls)
-    return {"usd": sum(e.get("cost_usd") or 0 for e in calls), "credits": sum(e.get("factory_credits") or 0 for e in calls),
+    return {"usd": trace_usd(calls), "credits": sum(e.get("factory_credits") or 0 for e in calls),
             "input": inp, "cached": sum(e.get("cached_tokens") or 0 for e in calls), "calls": len(calls)}
 
 
 def spend_text(s: dict) -> str:
-    parts = ([f"${s['usd']:.2f}"] if s["usd"] else []) + ([f"{s['credits']:,.0f} credits"] if s["credits"] else [])
-    return " + ".join(parts) or "$0.00"
+    """'$0.25 (81,878 credits)': dollars at API list price, plus the Factory credits Droid metered."""
+    return f"${s['usd']:.2f}" + (f" ({s['credits']:,.0f} credits)" if s["credits"] else "")
 
 
 def progress_panel(events: list[dict], now_t: float, status: str = "running", reward=None) -> Text:
@@ -697,22 +758,24 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
     if not steps:
         planner = pretty_model(cfg.get("planner_model", "the planner"))
         t.append(f"Planning: {planner} is reading the task and splitting it into steps "
-                 f"({_clock(now_t)} so far).", style="yellow")
+                 f"({_clock(now_t)} so far).", style="#e2b55c")
         return t
     n_done = sum(s["state"] == "done" for s in steps)
     n_fail = sum(s["state"] == "failed" for s in steps)
     width = 24
-    filled = round(width * (n_done + n_fail) / len(steps))
+    good = round(width * n_done / len(steps))
+    bad = round(width * (n_done + n_fail) / len(steps)) - good
     t.append("Progress  ", style="bold")
-    t.append("█" * filled, style="green")
-    t.append("░" * (width - filled), style="dim")
+    t.append("█" * good, style=OK)
+    t.append("█" * bad, style=BAD)
+    t.append("░" * (width - good - bad), style="dim")
     t.append(f"  {n_done} of {len(steps)} steps done" + (f", {n_fail} failed" if n_fail else ""))
     t.append(f"   ·   {'running for' if status == 'running' else 'ran for'} {_clock(now_t)}\n", style="dim")
     total = spend(events)
     caps = [f"${cfg['max_run_cost_usd']:.2f}" if cfg.get("max_run_cost_usd") else "",
             f"{cfg['max_run_credits']:,.0f} credits" if cfg.get("max_run_credits") else ""]
     cap = " / ".join(c for c in caps if c)
-    line = f"Spent     {spend_text(total)}" + (f" of {cap} cap" if cap else "")
+    line = f"Spent     {spend_text(total)} at list price" + (f", cap {cap}" if cap else "")
     if total["input"]:
         line += f"   ·   {100 * total['cached'] / total['input']:.0f}% of input from cache"
     t.append(line + "\n", style="dim")
@@ -762,15 +825,15 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
             line = f"           {word}: {who} · action {s['actions'] + 1}"
             line += f" of {turn_cap}" if turn_cap else ""
             line += f" · {_clock(s['attempt_elapsed'])}" + (f" of {_clock(time_cap)} allowed" if time_cap else "")
-            t.append(line + "\n", style="yellow")
+            t.append(line + "\n", style="#e2b55c")
             wait = Text(f"           waiting for {who.split(' (')[0]}'s next move: {_clock(s['idle'])}",
                         style="dim")
             if idle_cap and s["idle"] > idle_cap * 0.5:
-                wait.stylize("bold red")
-                wait.append(f"  (gives up at {_clock(idle_cap)} with no reply)", style="red")
+                wait.stylize("bold #e07a68")
+                wait.append(f"  (gives up at {_clock(idle_cap)} with no reply)", style="#e07a68")
             t.append_text(wait)
             if s["failed_calls"]:
-                t.append(f"  · {s['failed_calls']} failed model call(s)", style="red")
+                t.append(f"  · {s['failed_calls']} failed model call(s)", style="#e07a68")
             t.append("\n")
         elif s["state"] == "stopped":
             t.append(f"           {word}: {who} had taken {s['actions']} actions\n", style="dim")
@@ -781,7 +844,7 @@ def progress_panel(events: list[dict], now_t: float, status: str = "running", re
                 line += f" · needed {s['attempt'] - 1} escalation(s)"
             t.append(line + "\n", style="dim")
         for h in helper_states(events, s["id"]):
-            look = {"working": ("●", "yellow"), "done": ("✓", "green"), "failed": ("✗", "red")}[h["state"]]
+            look = {"working": ("●", "#e2b55c"), "done": ("✓", "#7fb685"), "failed": ("✗", "#e07a68")}[h["state"]]
             t.append(f"           ↳ {look[0]} helper {h['id']} ", style=look[1])
             t.append(pretty_model(h["model"]), style="bold")
             t.append(f"  {_short(h['task'], 60)}  ·  {h['calls']} calls · {spend_text(h['spend'])}\n", style="dim")
@@ -805,14 +868,14 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
     rows = []
     if not plan:
         who = pretty_model(cfg.get("planner_model", "")) if cfg else "the planner"
-        rows.append(("plan", Text(f"Planner: {who} is reading the task and making a plan …", style="yellow"), []))
+        rows.append(("plan", Text(f"Planner: {who} is reading the task and making a plan …", style="#e2b55c"), []))
         return rows
     steps = plan.get("steps", [])
     planner = pretty_model(plan.get("planner_model") or cfg.get("planner_model", "?"))
     if plan.get("planner") == "skipped":  # single-agent setups (baselines, build-then-review): no planner call
-        rows.append(("plan", Text.assemble(("Plan: ", "bold magenta"), "no planner; one agent does the whole task"), []))
+        rows.append(("plan", Text.assemble(("Plan: ", "bold #b6a0e0"), "no planner; one agent does the whole task"), []))
     else:
-        rows.append(("plan", Text.assemble(("Planner: ", "bold magenta"), (planner, "bold"),
+        rows.append(("plan", Text.assemble(("Planner: ", "bold #b6a0e0"), (planner, "bold"),
                                            f" split the task into {len(steps)} step{'s' if len(steps) != 1 else ''}"), []))
     for s in steps:
         sid = s["id"]
@@ -822,14 +885,15 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         esc = next((e for e in events if e.get("event") == "escalate" and e.get("step") == sid), None)
         finished = last and (last.get("passed") or not esc or len(atts) == 2)
         if last and last.get("passed"):
-            icon, style = "✔", "bold green"
+            icon, style = "✔", "bold #7fb685"
         elif finished:
-            icon, style = "✘", "bold red"
+            icon, style = "✘", "bold #e07a68"
         elif route:
-            icon, style = "●", "bold yellow"
+            icon, style = "●", "bold #e2b55c"
         else:
             icon, style = "○", "dim"
-        label = Text(f"{icon} ", style=style)
+        label = Text()  # Text(style=...) would colour the whole label, not just the icon
+        label.append(f"{icon} ", style=style)
         label.append(_short(s["goal"], 95), style="bold" if route else "dim")
         children = []
         if not route:
@@ -840,7 +904,7 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         router = _router_name(route).split(" (")[0]
         target = pretty_model(_tier_model(route, events))
         rated = f" rated it {difficulty(route['score'])}" if route.get("score") is not None else ""
-        children.append((f"{sid}/route", Text.assemble(("Router: ", "bold cyan"), (router, "bold"),
+        children.append((f"{sid}/route", Text.assemble(("Router: ", "bold #8fb0d9"), (router, "bold"),
                                                        f"{rated} and gave it to ", (target, "bold")), []))
         esc_model = tiers[esc["to_tier"]] if esc and tiers and esc.get("to_tier", 99) < len(tiers) else ""
         handoff = next((e for e in events if e.get("event") == "handoff" and e.get("step") == sid), None)
@@ -849,7 +913,7 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         for n, msgs in _attempt_files(workers, sid):
             if n > 1 and esc:
                 children.append((f"{sid}/esc", Text.assemble(
-                    ("Escalated: ", "bold yellow"), f"the first attempt did not pass, so the step goes to ",
+                    ("Escalated: ", "bold #e2b55c"), f"the first attempt did not pass, so the step goes to ",
                     (pretty_model(esc_model) if esc_model else "the next tier", "bold"),
                     " with the first attempt's notes" if handoff else " (starting over)"), []))
             model = pretty_model((atts.get(n) or {}).get("model") or
@@ -865,16 +929,16 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
                 turns.append((f"{sid}/a{n}/t{k}", turn_summary(thought, cmd, ok), kids))
                 if reviews and nxt is not None and "senior reviewer" in str(nxt.get("content") or ""):
                     turns.append(review_node(f"{sid}/a{n}/r{k}", reviews.pop(0)))  # the review sent this submit back
-            head = Text.assemble(("Lead: " if helper_names else "Worker: ", "bold blue"), (model, "bold"),
+            head = Text.assemble(("Lead: " if helper_names else "Worker: ", "bold #8fb0d9"), (model, "bold"),
                                  " (second try, one tier up)" if n > 1 else "")
-            children.append((f"{sid}/a{n}", head, turns or [(f"{sid}/a{n}/start", Text("Starting …", style="yellow"), [])]))
+            children.append((f"{sid}/a{n}", head, turns or [(f"{sid}/a{n}/start", Text("Starting …", style="#e2b55c"), [])]))
             a = atts.get(n)
             if a:
                 if a.get("check"):
                     verdict = "passed" if a.get("passed") else "failed"
-                    text = Text.assemble(("Check: ", "bold green"), f"the step's test {verdict}")
+                    text = Text.assemble(("Check: ", "bold #7fb685"), f"the step's test {verdict}")
                 else:
-                    text = Text.assemble(("Check: ", "bold green"),
+                    text = Text.assemble(("Check: ", "bold #7fb685"),
                                          "no test for this step, so the worker's word was accepted"
                                          if a.get("passed") else "no test, and the worker did not finish")
                 if a.get("exit_status") not in (None, "Submitted"):
@@ -884,10 +948,10 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         children += [review_node(f"{sid}/rv{i}", r) for i, r in enumerate(reviews)]  # second looks
         for i, f in enumerate(e for e in events if e.get("event") == "senior_fix" and e.get("step") == sid
                               and e.get("phase") == "end"):
-            children.append((f"{sid}/fix{i}", Text.assemble(("Senior fix: ", "bold magenta"), (pretty_model(f.get("model", "")), "bold"),
+            children.append((f"{sid}/fix{i}", Text.assemble(("Senior fix: ", "bold #b6a0e0"), (pretty_model(f.get("model", "")), "bold"),
                              f" fixed what was still open ({f.get('n_calls')} calls, {f.get('exit_status')})"), []))
         if esc and not any(k == f"{sid}/esc" for k, _, _ in children):
-            children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold yellow"), "to ",
+            children.append((f"{sid}/esc", Text.assemble(("Escalated: ", "bold #e2b55c"), "to ",
                                                          (pretty_model(esc_model) or "the next tier", "bold")), []))
         rows.append((sid, label, children))
     done = next((e for e in events if e.get("event") == "done"), None)
@@ -896,10 +960,10 @@ def overview(events: list[dict], workers: dict[str, list], result: dict | None =
         if reward is not None:
             rows.append(("result", Text.assemble(("Result: ", "bold"),
                                                  ("task solved ✔" if reward == 1 else "task not solved ✘",
-                                                  "bold green" if reward == 1 else "bold red"),
+                                                  "bold #7fb685" if reward == 1 else "bold #e07a68"),
                                                  " (Terminal-Bench's own tests)"), []))
     elif done:
-        rows.append(("done", Text("All steps finished; Terminal-Bench is grading the result …", style="yellow"), []))
+        rows.append(("done", Text("All steps finished; Terminal-Bench is grading the result …", style="#e2b55c"), []))
     return rows
 
 def review_node(key: str, r: dict) -> tuple:
@@ -907,14 +971,14 @@ def review_node(key: str, r: dict) -> tuple:
     probs = r.get("problems") or []
     who = pretty_model(r.get("model", ""))
     if r.get("verdict") == "fix":
-        head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"),
+        head = Text.assemble(("Reviewer: ", "bold #b6a0e0"), (who, "bold"),
                              f" read the task, the transcript and the diff, and sent the work back with {len(probs)} problem(s)")
     elif r.get("verdict") in ("open", "fixed"):
-        head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"), " second look after the fix: "
+        head = Text.assemble(("Reviewer: ", "bold #b6a0e0"), (who, "bold"), " second look after the fix: "
                              + (f"{len(probs)} still open" if probs else "all fixed"))
     else:
-        head = Text.assemble(("Reviewer: ", "bold magenta"), (who, "bold"), " approved the work")
-    return (key, head, [(f"{key}/p{i}", Text(_short(p.get("what"), 150), style="yellow"), [])
+        head = Text.assemble(("Reviewer: ", "bold #b6a0e0"), (who, "bold"), " approved the work")
+    return (key, head, [(f"{key}/p{i}", Text(_short(p.get("what"), 150), style="#e2b55c"), [])
                         for i, p in enumerate(probs)])
 
 
@@ -927,12 +991,12 @@ def helper_node(parent: str, h: dict, workers: dict[str, list]) -> tuple:
         nxt = msgs[i + 1] if i + 1 < len(msgs) else None
         ok = None if nxt is None else (True if nxt.get("role") == "exit" else summarize_output(str(nxt.get("content") or ""))[0])
         turns.append((f"{parent}/{h['id']}/t{k}", turn_summary(thought, cmd, ok), []))
-    look = {"working": ("●", "yellow"), "done": ("✔", "green"), "failed": ("✘", "red")}[h["state"]]
+    look = {"working": ("●", "#e2b55c"), "done": ("✔", "#7fb685"), "failed": ("✘", "#e07a68")}[h["state"]]
     if h["summary"]:
         turns.append((f"{parent}/{h['id']}/report", Text.assemble(("Report: ", "bold"), _short(h["summary"], 150)), []))
     head = Text.assemble((f"{look[0]} Helper: ", f"bold {look[1]}"), (pretty_model(h["model"]), "bold"),
                          f"  {_short(h['task'], 80)}  ", (f"{h['calls']} calls · {spend_text(h['spend'])}", "dim"))
-    return (f"{parent}/{h['id']}", head, turns or [(f"{parent}/{h['id']}/start", Text("Starting …", style="yellow"), [])])
+    return (f"{parent}/{h['id']}", head, turns or [(f"{parent}/{h['id']}/start", Text("Starting …", style="#e2b55c"), [])])
 
 
 # ---------- screens ----------
@@ -943,10 +1007,11 @@ class NewRunScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         configs = sorted(p.name for p in (ROOT / "configs").glob("phase2-*.json"))
         default_cfg = "phase2-droid.json" if "phase2-droid.json" in configs else configs[0]
-        with VerticalScroll(id="dialog"):
-            yield Label("New run", id="title")
+        with VerticalScroll(id="dialog") as dialog:
+            dialog.border_title = "New run"
+            dialog.border_subtitle = "Esc to cancel"
             yield Label("Task")
-            yield Select(J.TASKS, value=J.SMOKE_TASK, allow_blank=False, id="task")
+            yield Select(task_choices(), value=J.SMOKE_TASK, allow_blank=False, id="task")
             yield Label("Evaluation setup (fills in the config, policy and limits below)")
             yield Select([("custom: set them yourself", "")] + [(s, s) for s in SETUPS], value="",
                          allow_blank=False, id="setup")
@@ -1041,29 +1106,49 @@ class ResultsScreen(ModalScreen):
         self.prefixes = R.prefixes(root)
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="results"):
-            yield Label("Results  (Esc to close)", id="title")
+        with VerticalScroll(id="results") as panel:
+            panel.border_title = "Compare results"
+            panel.border_subtitle = "Esc to close"
             if self.prefixes:
                 yield Select([(p, p) for p in self.prefixes], value=self.prefixes[0], allow_blank=False,
                              id="prefix")
-            yield Static(id="table")
+            yield Static(id="summary")
+            yield DataTable(id="by-setup", zebra_stripes=True, cursor_type="none")
+            yield Label("Per task: each run's share of hidden tests passed (✓ = solved)", classes="section")
+            yield DataTable(id="by-task", zebra_stripes=True, cursor_type="none")
+            yield Static("Solved = all hidden tests pass. Cost = tokens x API list price (nothing is billed per token)."
+                         " Hit a limit = ended by the time or command limit before submitting. Reviewed = got the"
+                         " senior review.", classes="note")
 
     def on_mount(self) -> None:
         self.show()
         self.set_interval(30, self.show)
 
     def show(self) -> None:
+        summary = self.query_one("#summary", Static)
         if not self.prefixes:
-            self.query_one("#table", Static).update(Text("No evaluations under jobs/ yet.", style="dim"))
+            summary.update(Text("No evaluations under jobs/ yet.", style=MUTED))
             return
-        prefix = str(self.query_one("#prefix", Select).value)
-        self.query_one("#table", Static).update(results_text(R.progress(self.root, prefix)))
+        p = R.progress(self.root, str(self.query_one("#prefix", Select).value))
+        summary.update(results_header(p))
+        by_setup = self.query_one("#by-setup", DataTable)
+        fill(by_setup, list(SETUP_COLUMNS), setup_rows(p))
+        fill(self.query_one("#by-task", DataTable), *task_rows(p))
 
     def on_select_changed(self, event: Select.Changed) -> None:
         self.show()
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)
+
+
+def fill(table: DataTable, columns: list[str], rows: list[tuple]) -> None:
+    """Replace a table's contents, each column as wide as its widest cell (rich cells do not auto-size)."""
+    table.clear(columns=True)
+    for i, col in enumerate(columns):
+        width = max([len(col)] + [len(r[i].plain if isinstance(r[i], Text) else str(r[i])) for r in rows])
+        table.add_column(col, width=width + 1)
+    table.add_rows(rows)
 
 
 class HelpScreen(ModalScreen):
@@ -1106,27 +1191,38 @@ class ConfirmScreen(ModalScreen):
 class HarnessTUI(App):
     TITLE = "MLR570 routed harness"
     CSS = """
-    #sidebar { width: 38; border-right: solid $panel-lighten-2; padding: 0 1; }
-    #sidebar Button { width: 100%; margin: 1 0; }
-    #jobs { height: 1fr; }
-    #main { padding: 0 1; }
-    #meta { height: auto; padding: 1 0 0 0; }
-    #progress { height: auto; border: round $panel-lighten-2; padding: 0 1; margin: 1 0 0 0; }
+    Screen { background: $background; }
+    * { scrollbar-color: $panel-lighten-2; scrollbar-color-hover: $primary 60%; scrollbar-color-active: $primary;
+        scrollbar-background: $background; scrollbar-background-hover: $background; scrollbar-size-horizontal: 1; }
+    #sidebar { width: 42; background: $surface; padding: 1 1 0 1; }
+    #sidebar Button { width: 100%; height: 3; margin: 0 0 1 0; border: none; }
+    #compare { background: $panel; }
+    #filter { margin: 0 0 1 0; border: round $panel-lighten-1; background: $surface; }
+    #filter:focus { border: round $primary; }
+    #jobs { height: 1fr; background: $surface; }
+    #jobs > ListItem { padding: 0 1; margin: 0 0 1 0; background: $surface; }
+    #jobs > ListItem.-highlight { background: $primary 18%; }
+    #main { padding: 1 2 0 2; }
+    #meta { height: auto; }
+    #progress { height: auto; border: round $panel-lighten-2; padding: 0 1; margin: 1 0 1 0; }
     #roles { height: auto; padding: 1 1; }
     TabbedContent { height: 1fr; }
-    RichLog { height: 1fr; }
+    RichLog, Tree { height: 1fr; background: $background; }
     NewRunScreen, ConfirmScreen, ResultsScreen, HelpScreen { align: center middle; }
-    #filter { margin: 0 0 1 0; }
-    #results { width: 120; height: 90%; border: thick $accent; background: $surface; padding: 1 2; }
-    #help { width: 110; height: auto; max-height: 90%; border: thick $accent; background: $surface; padding: 1 2; }
-    #dialog { width: 90; height: auto; max-height: 90%; border: thick $accent; background: $surface; padding: 1 2; }
-    #confirm { width: 70; height: auto; border: thick $error; background: $surface; padding: 1 2; }
+    #dialog { width: 92; height: auto; max-height: 90%; border: round $primary; background: $surface; padding: 1 2; }
+    #dialog Label { color: $text-muted; }
+    #confirm { width: 70; height: auto; border: round $error; background: $surface; padding: 1 2; }
+    #results { width: 94%; height: auto; max-height: 92%; border: round $primary; background: $surface; padding: 1 2; }
+    #results DataTable { height: auto; max-height: 20; margin: 1 0; }
+    #results .section { margin: 1 0 0 0; text-style: bold; }
+    #results .note, #help { color: $text-muted; }
+    #help { width: 100; height: auto; max-height: 90%; border: round $primary; background: $surface; padding: 1 2; }
     #title { text-style: bold; margin-bottom: 1; }
     #caps { height: auto; }
     #caps Vertical { height: auto; width: 1fr; }
     #buttons { height: auto; margin-top: 1; }
     #buttons Button { margin-right: 2; }
-    #preview { margin-top: 1; }
+    #preview { margin-top: 1; color: $text-muted; }
     """
     BINDINGS = [Binding("n", "new_run", "New run"), Binding("c", "compare", "Compare results"),
                 Binding("slash", "focus_filter", "Filter"), Binding("s", "stop_run", "Stop run"),
@@ -1173,6 +1269,9 @@ class HarnessTUI(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self.register_theme(THEME)
+        self.theme = "mlr570"  # other themes: Ctrl+P, "Change theme"
+        self.query_one("#progress", Static).border_title = "Now"
         self.query_one("#steps", DataTable).add_columns("step", "goal", "routed by", "routed to",
                                                         "attempts", "status", "calls")
         await self.refresh_all()
@@ -1193,14 +1292,12 @@ class HarnessTUI(App):
             await lv.clear()
             items = []
             for j in self.shown:
-                label = Text(f"{STATUS_ICON.get(j.status, '?')} ", style=STATUS_STYLE.get(j.status, ""))
-                label.append(j.name)
-                label.append(f"\n  {j.status}" + (f" · reward {j.reward}" if j.reward is not None else ""), style="dim")
-                items.append(ListItem(Label(label)))
+                items.append(ListItem(Label(job_label(j.name, j.status, j.reward))))
             await lv.extend(items)
-            if self.selected is None and self.shown:
-                self.selected = self.shown[0].name
             names = [j.name for j in self.shown]
+            if self.shown and self.selected not in names:  # the filter hid it: show the first match instead
+                self.selected = self.shown[0].name
+                self._collapsed.clear()
             if self.selected in names:
                 lv.index = names.index(self.selected)
         self.render_job()
@@ -1226,19 +1323,23 @@ class HarnessTUI(App):
             return
         self._view_sig = sig
         tot = totals(events)
-        head = Text(job.name, style="bold")
-        head.append(f"  {STATUS_ICON.get(job.status, '')} {job.status}", style=STATUS_STYLE.get(job.status, ""))
-        if job.reward is not None:
-            head.append(f"  reward {job.reward}", style="bold")
+        head = Text(job.task.split("/")[-1] or job.name, style="bold")
+        head.append(f"   {STATUS_ICON.get(job.status, '')} {STATUS_WORD.get(job.status, job.status)}",
+                    style=STATUS_STYLE.get(job.status, ""))
         elapsed = (events[-1]["t"] if events else 0)
-        head.append(f"\ntask {job.task}   backend {Path(job.config).name or '?'}   policy {job.policy or '?'}"
-                    f"   caps {job.caps or '-'}", style="dim")
-        spent = (f"{_k(tot['factory_credits'])} Factory credits" if tot["factory_credits"] else
-                 f"${tot['cost_usd']:.4f} at list price" if tot["cost_usd"] else "nothing yet")
-        head.append(f"\nSpent so far: {spent} over {tot['calls']} model calls   (token details: Details tab)",
-                    style="dim")
+        try:
+            prefix, setup, _, rep = R.split_name(job.name)
+            what = f"evaluation {prefix} · setup {setup} · repeat {rep}"
+        except ValueError:
+            what = f"run {job.name}"
+        limits = limits_text(job.caps)
+        head.append(f"\n{what}" + (f"   ·   limits {limits}" if limits else ""), style=MUTED)
+        head.append(f"\nconfig {Path(job.config).stem.removeprefix('phase2-') or '?'} · policy {job.policy or '?'}",
+                    style=MUTED)
+        head.append(f"\nSpent {spend_text(spend(events))} at API list price over {tot['calls']} model calls",
+                    style=MUTED)
         if job.exception:
-            head.append(f"\n{job.exception}", style="red")
+            head.append(f"\n{job.exception}", style="#e07a68")
         meta.update(head)
         roles = roles_text(events) if events else Text("nothing yet", style="dim")
         roles.append(f"\n\n{tot['calls']} model calls · {_k(tot['input_tokens'])} input tokens · "
