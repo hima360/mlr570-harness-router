@@ -400,11 +400,18 @@ def summarize_output(obs: str) -> tuple[bool, str]:
     if not m:
         return True, _short(obs, 110)
     code, body = int(m.group(1)), (m.group(2) or "")
-    lines = [l for l in body.splitlines() if l.strip() and not re.match(r"total \d+$", l.strip())]
+    lines = [l for l in body.splitlines() if l.strip() and not re.match(r"total \d+$", l.strip())
+             and not l.startswith("[Clock]")]  # v2.6's clock line is not the command's output
     first = _short(lines[0], 100) if lines else "(no output)"
     trimmed = " · long output, trimmed" if "characters elided" in body else ""
     head = f"ok · {len(lines)} lines{trimmed}" if code == 0 else f"failed (exit {code})"
     return code == 0, f"{head} · {first}"
+
+
+def clock_nudge(obs: str) -> str:
+    """v2.6: the clock's wrap-up or submit-now line in a command's output, shortened ("" if none)."""
+    m = re.search(r"\[Clock\] ([^\n]*?) used\. (Wrap up|Submit now)", obs)
+    return f"{m.group(1)} used: told to {m.group(2).lower()}" if m else ""
 
 
 def _attempt_files(workers: dict, step: str) -> list[tuple[int, list]]:
@@ -503,6 +510,8 @@ def story_lines(events: list[dict], workers: dict[str, list]) -> list[Text]:
                 elif nxt and nxt.get("role") != "assistant":
                     ok, summary = summarize_output(str(nxt.get("content") or ""))
                     out.append(Text(f"      → {summary}", style="green" if ok else "red"))
+                    if nudge := clock_nudge(str(nxt.get("content") or "")):
+                        out.append(Text(f"      CLOCK {nudge}", style="bold yellow"))
                 elif not nxt:
                     out.append(Text("      … running", style="yellow"))
             a = attempts.get(n)

@@ -1503,3 +1503,13 @@ def test_tui_filter_setup_picker_and_results(tmp_path):
             assert isinstance(app.screen, tui.HelpScreen)
 
     asyncio.run(drive())
+
+
+def test_tui_story_shows_the_clock_nudge_not_as_output():
+    from phase2 import tui
+
+    obs = ("<returncode>0</returncode>\n<output>\n[Clock] 32 of 45 min, 40 of 80 commands used. Wrap up: finish"
+           "\n</output>")
+    assert tui.summarize_output(obs)[1] == "ok · 0 lines · (no output)"
+    assert tui.clock_nudge(obs) == "32 of 45 min, 40 of 80 commands used: told to wrap up"
+    assert tui.clock_nudge("<returncode>0</returncode><output>[Clock] 1 of 45 min used.</output>") == ""
