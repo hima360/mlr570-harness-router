@@ -1513,3 +1513,19 @@ def test_tui_story_shows_the_clock_nudge_not_as_output():
     assert tui.summarize_output(obs)[1] == "ok · 0 lines · (no output)"
     assert tui.clock_nudge(obs) == "32 of 45 min, 40 of 80 commands used: told to wrap up"
     assert tui.clock_nudge("<returncode>0</returncode><output>[Clock] 1 of 45 min used.</output>") == ""
+
+
+def test_html_report_marks_best_setup_and_escapes(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("report_html", os.path.join(os.path.dirname(__file__), "..", "scripts", "report_html.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    from phase2 import results as R
+
+    _fake_eval(tmp_path)
+    page = m.build(R.collect(tmp_path, "ev9"), "<x>", {"glmreview26": "v2.6"})
+    assert "&lt;x&gt;" in page and "<x>" not in page
+    assert "<tr class='best'><td>v2.6</td>" in page and "✓ 100%" in page and "class='b run'" in page
+    assert "http" not in page  # nothing loaded from the web
+    assert "No finished runs yet" in m.build([], "t", {})
