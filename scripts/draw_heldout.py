@@ -2,9 +2,9 @@
 
   python scripts/draw_heldout.py --seed 571 --n 6
 
-Never run = no job under jobs/ (or jobs/_excluded_*) names the task, plus --used. Filters, fixed before the draw
+Never run = not in EARLY_USED, no job under jobs/ (or jobs/_excluded_*) names it, and not in --used. Filters, fixed before the draw
 (2026-10-29): no GPU, at most 4 CPUs and 8 GB, text only (no Media/Hardware), expert estimate up to 8 hours.
-The first draw (ho1/ho2) was seed 570 with the 15 dev-set tasks as the only used ones: --no-jobs --used <those 15>.
+The first draw (ho1/ho2) was seed 570 with only EARLY_USED excluded: --no-jobs.
 """
 import argparse
 import os
@@ -14,6 +14,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET = Path(os.path.expanduser("~/Developer/harbor-datasets/terminal-bench"))
+# Used before any held-out draw (dev set, smoke tests, early runs), whether or not a job folder still names them.
+EARLY_USED = ["cumulative-layout-shift", "data-anonymization", "embedding-drift-monitor", "heat-pump-warranty",
+              "kv-live-surgery", "legacy-utility-triage", "music-harmony", "mvcc-lsm-compaction", "payments-pipeline-fix",
+              "pretrain-shard-corruption", "session-window-debug", "shadow-relay", "telecom-entity-resolution",
+              "html-js-filter", "interleaved-vigenere"]
 
 
 def eligible(dataset: Path) -> list[str]:
@@ -46,7 +51,7 @@ def main(argv=None) -> list[str]:
     ap.add_argument("--dataset", type=Path, default=DATASET)
     a = ap.parse_args(argv)
     elig = eligible(a.dataset)
-    used = set(a.used) | (set() if a.no_jobs else run_tasks(ROOT / "jobs", elig))
+    used = set(EARLY_USED) | set(a.used) | (set() if a.no_jobs else run_tasks(ROOT / "jobs", elig))
     pool = [t for t in elig if t not in used]
     pick = sorted(random.Random(a.seed).sample(pool, a.n))
     print(f"{len(pool)} eligible never-run tasks (seed {a.seed}); pick: {' '.join(pick)}")
