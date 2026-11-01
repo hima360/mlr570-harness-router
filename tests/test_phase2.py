@@ -1553,3 +1553,22 @@ def test_tui_task_choices_list_the_dataset(tmp_path):
     choices = tui.task_choices(tmp_path)
     assert choices[0][1] == "tests/harbor_smoke/hello-file" and choices[-1] == ("tb4: zeta-task", "terminal-bench/zeta-task")
     assert len(choices) == len(tui.J.TASKS) + 1
+
+
+def test_partial_credit_uses_the_tasks_own_score(tmp_path):
+    from phase2.results import tests_fraction
+
+    def trial(name, files):
+        v = tmp_path / name / "verifier"
+        v.mkdir(parents=True)
+        for f, d in files.items():
+            (v / f).write_text(json.dumps(d))
+        return str(tmp_path / name)
+
+    one_test = {"results": {"summary": {"passed": 1, "tests": 1}}}  # a wrapper test that always passes
+    assert tests_fraction(trial("points", {"ctrf.json": one_test, "reward.json": {"reward": 0.0},
+                                           "trace_results.json": {"points": 112, "total": 232}})) == 112 / 232
+    checks = [{"passed": True, "weight": 0.75}, {"passed": False, "weight": 0.25}]
+    assert tests_fraction(trial("weighted", {"ctrf.json": one_test, "reward_details.json": {"checks": checks}})) == 0.75
+    assert tests_fraction(trial("plain", {"ctrf.json": {"results": {"summary": {"passed": 3, "tests": 4}}}})) == 0.75
+    assert tests_fraction(trial("partial", {"reward.json": {"reward": 0, "partial_score": 0.4}})) == 0.4

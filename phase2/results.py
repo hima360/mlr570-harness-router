@@ -12,14 +12,35 @@ from .list_prices import trace_usd
 
 
 def tests_fraction(trial: str) -> float | None:
-    """Share of the task's own tests that passed (ctrf.json), or its partial score (reward.json)."""
-    for f in glob.glob(trial + "/verifier/ctrf.json"):
-        s = json.load(open(f))["results"]["summary"]
+    """Partial credit: the task's own partial score where it writes one, else the share of its tests that passed.
+
+    Some tasks run one pytest test that always passes and score inside it against a pass mark (2026-11-01:
+    freight-dispatch-shift writes points/total to trace_results.json, intrastat-meldung weighted checks to
+    reward_details.json); counting their tests would read as 100% for a failed run."""
+    v = trial + "/verifier/"
+    rj = _load(v + "reward.json")
+    if "partial_score" in rj:
+        return rj["partial_score"]
+    checks = _load(v + "reward_details.json").get("checks") or []
+    if checks and all("weight" in c for c in checks):
+        total = sum(c["weight"] for c in checks)
+        return sum(c["weight"] for c in checks if c.get("passed")) / total if total else None
+    tr = _load(v + "trace_results.json")
+    if tr.get("total"):
+        return tr.get("points", 0) / tr["total"]
+    ctrf = _load(v + "ctrf.json")
+    if ctrf:
+        s = ctrf["results"]["summary"]
         return s["passed"] / s["tests"] if s.get("tests") else None
-    for f in glob.glob(trial + "/verifier/reward.json"):
-        d = json.load(open(f))
-        return d.get("partial_score", d.get("reward"))
-    return None
+    return rj.get("reward")
+
+
+def _load(path: str) -> dict:
+    try:
+        d = json.load(open(path))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def split_name(name: str) -> tuple[str, str, str, int]:
