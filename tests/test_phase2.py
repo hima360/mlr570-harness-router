@@ -1440,3 +1440,66 @@ def test_v26_clock_is_wired_only_when_on():
     seen.clear()
     asyncio.run(main(load_config()))
     assert any("[Clock]" in m for m in on) and not any("[Clock]" in m for m in seen)
+
+
+def _fake_eval(root, prefix="ev9"):
+    """Two finished runs and one running one, as Harbor leaves them under jobs/."""
+    import json as _json
+
+    for name, reward, passed in ((f"{prefix}-opus-alpha-r1", 0.0, 3), (f"{prefix}-glmreview26-alpha-r1", 1.0, 4)):
+        trial = root / "jobs" / name / "alpha__x1"
+        (trial / "agent").mkdir(parents=True)
+        (trial / "verifier").mkdir()
+        (trial / "result.json").write_text(_json.dumps({"verifier_result": {"rewards": {"reward": reward}}}))
+        (trial / "verifier" / "ctrf.json").write_text(_json.dumps({"results": {"summary": {"passed": passed, "tests": 4}}}))
+        (trial / "agent" / "trace.jsonl").write_text(_json.dumps(
+            {"t": 600.0, "event": "llm_call", "model": "droid/claude-opus-5-5", "input_tokens": 1000,
+             "cached_tokens": 0, "output_tokens": 100}) + "\n")
+    (root / "jobs" / f"{prefix}-glmreview26-alpha-r2").mkdir()
+    (root / "jobs" / f"{prefix}.plan.json").write_text(_json.dumps(
+        {"tasks": ["alpha", "beta"], "setups": ["opus", "glmreview26"], "repeats": 2, "parallel": 2}))
+
+
+def test_results_progress_and_names(tmp_path):
+    from phase2 import results as R
+
+    assert R.split_name("ho4-glmreview26-ctr-optimization-r2") == ("ho4", "glmreview26", "ctr-optimization", 2)
+    assert R.split_name("ev7-review-kv-live-surgery") == ("ev7", "review", "kv-live-surgery", 1)
+    _fake_eval(tmp_path)
+    p = R.progress(tmp_path, "ev9", now=0)
+    assert (p["total"], p["done"], p["running"], p["queued"]) == (8, 2, 1, 5)
+    assert p["setups"]["glmreview26"]["passed"] == 1 and p["setups"]["opus"]["mean_tests"] == 0.75
+    assert p["eta"] == 60 * 10 * 6 / 2  # 10 min a run, 6 left, 2 at once
+    assert R.prefixes(tmp_path) == ["ev9"]
+
+
+def test_tui_filter_setup_picker_and_results(tmp_path):
+    from phase2 import tui
+
+    assert tui.job_matches("ho4-glm-x-r1", "running", "ho4 RUN") and not tui.job_matches("ho4-glm", "failed", "run")
+    v = tui.setup_values("glmreview26", ["configs/phase2-droid-glm-review26.json"])
+    assert v["policy"] == "fixed:1" and v["config"] == "configs/phase2-droid-glm-review26.json"
+    assert v["caps"]["worker_step_limit"] == "80" and "config" not in tui.setup_values("opus", [])
+    _fake_eval(tmp_path)
+    from phase2 import results as R
+
+    text = tui.results_text(R.progress(tmp_path, "ev9")).plain
+    assert "2/8 runs done" in text and "alpha" in text and "✓" in text and "75%" in text
+
+    async def drive():
+        app = tui.HarnessTUI(root=tmp_path, poll_sec=60)
+        async with app.run_test() as pilot:
+            assert len(app.shown) == 3
+            app.query_one("#filter").value = "opus"
+            await pilot.pause()
+            assert [j.name for j in app.shown] == ["ev9-opus-alpha-r1"]
+            app.query_one("#jobs").focus()
+            await pilot.press("c")
+            await pilot.pause()
+            assert isinstance(app.screen, tui.ResultsScreen)
+            await pilot.press("escape")
+            await pilot.press("question_mark")
+            await pilot.pause()
+            assert isinstance(app.screen, tui.HelpScreen)
+
+    asyncio.run(drive())

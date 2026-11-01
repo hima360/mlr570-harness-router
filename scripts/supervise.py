@@ -176,6 +176,8 @@ def main(argv=None) -> int:
     configs = sorted({a.config} | {run_compare.SETUPS[s][2] for s in setups if len(run_compare.SETUPS[s]) > 2})
     models = models_in(configs)
     log(a.prefix, f"start: setups={setups} models={models} parallel={a.parallel} repeats={a.repeats}")
+    (ROOT / "jobs" / f"{a.prefix}.plan.json").write_text(json.dumps(  # for scripts/progress.py and the TUI
+        {"tasks": a.tasks, "setups": setups, "repeats": a.repeats, "parallel": a.parallel, "config": a.config}))
     while other_queue_running(a.prefix):  # an earlier queue for this prefix: let it finish first
         log(a.prefix, "another queue for this prefix is running; waiting for it")
         time.sleep(120)

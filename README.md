@@ -83,11 +83,28 @@ PYTHONPATH=$PWD .venv/bin/harbor run -p tests/harbor_smoke/hello-file -a phase2.
 Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence threshold), `laya`, `arch`,
 `random`, `fixed:<tier>` (`fixed:3` = always Opus, `fixed:0` = always cheapest).
 
+### Easy mode
+
+| To | Do |
+|---|---|
+| Watch runs, compare results, start a run | double-click `Harness.command` (keys: `n` new run, `c` compare, `/` filter, `?` help) |
+| Show the TUI on a recorded run (no Docker, no credits) | double-click `Demo.command` |
+| See how far an evaluation is | `.venv/bin/python scripts/progress.py [prefix] [-w]` |
+| Get a results page to open in a browser | `.venv/bin/python scripts/report_html.py <prefix> [<prefix> ...]` (writes `reports/`) |
+| Run an evaluation unattended | `scripts/supervise.sh --config ... --prefix <p> --setups a,b --repeats 2 <tasks>` |
+| Draw new held-out tasks | `.venv/bin/python scripts/draw_heldout.py --seed <n>` |
+
 ### TUI (start, watch, browse and stop runs)
 
 ```bash
 .venv/bin/python -m phase2.tui
 ```
+
+- `c` **Compare results**: pick an evaluation; one line per setup (solved, tests passed, tokens, cost, cost per
+  solve, minutes per run, best setup in green), each task's runs per setup, and how far it is (refreshes).
+- `n` **New run** has an *Evaluation setup* picker (`opus`, `glm`, `glmreview26`, ...) that fills in the config,
+  policy and limits that setup uses in `scripts/run_compare.py` (`phase2/setups.py`).
+- The filter box above the jobs list keeps runs whose name or status has every word typed (`ho4 running`).
 
 - Sidebar: `+ New run` and every job in `jobs/` (● running, ✓ passed, ✗ failed, ! error, ■ stopped).
 - Main pane: the roles box shows who actually did each job in that run (planner model, router that decided,

@@ -1,7 +1,8 @@
 """Terminal UI for the routed harness: start runs, watch who does what live, browse and stop jobs.
 
-  .venv/bin/python -m phase2.tui
+  .venv/bin/python -m phase2.tui        (or double-click Harness.command)
 
+Keys: n new run, c compare results, / filter jobs, s stop the selected run, r refresh, ? help, q quit.
 Everything shown comes from the run's own records (trace.jsonl, worker trajectories, Harbor results),
 so the planner, router and worker names are the ones that actually ran, not the config defaults.
 """
@@ -18,6 +19,8 @@ from textual.widgets import (Button, DataTable, Footer, Header, Input, Label, Li
                              Select, Static, TabbedContent, TabPane, Tree)
 
 from . import jobs as J
+from . import results as R
+from .setups import SETUPS
 from .delegate import parse_delegate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +39,74 @@ CMD_RE = re.compile(r"```mswea_bash_command\s*(.*?)(?:```|$)", re.S)
 
 
 # ---------- pure renderers (tested without a terminal) ----------
+
+def job_matches(name: str, status: str, query: str) -> bool:
+    """Sidebar filter: every space-separated word must appear in the job name or its status."""
+    hay = f"{name} {status}".lower()
+    return all(w in hay for w in query.lower().split())
+
+
+def setup_values(setup: str, configs: list[str]) -> dict:
+    """What choosing an evaluation setup fills in on the New run screen: its policy, caps and config."""
+    policy, caps, *cfg = SETUPS[setup]
+    out = {"policy": policy, "caps": dict(caps)}
+    if cfg and cfg[0] in configs:
+        out["config"] = cfg[0]
+    return out
+
+
+def results_text(p: dict) -> Text:
+    """The Results screen: progress, one line per setup, then each task's runs per setup."""
+    t = Text(f"{p['prefix']}  ", style="bold")
+    eta = time.strftime("%H:%M", time.localtime(p["eta"])) if p.get("eta") else "-"
+    t.append(f"{p['done']}/{p['total']} runs done · {p['running']} running · {p['queued']} queued · "
+             f"finish about {eta}\n\n", style="dim")
+    if not p["setups"]:
+        t.append("No finished runs yet.", style="dim")
+        return t
+    best = max(p["setups"].items(), key=lambda kv: (kv[1]["passed"], -kv[1]["usd"]))[0]
+    t.append(f"{'setup':14s}{'solved':>9s}{'tests':>8s}{'tokens':>9s}{'cost':>9s}{'$/solve':>9s}{'min/run':>9s}\n",
+             style="bold")
+    for s, a in p["setups"].items():
+        per = "-" if a["passed"] == 0 else f"${a['usd_per_solve']:.2f}"
+        line = (f"{s:14s}{a['passed']:>4d}/{a['runs']:<4d}{a['mean_tests']:>8.0%}{a['tokens'] / 1e6:>8.1f}M"
+                f"{'$' + format(a['usd'], '.2f'):>9s}{per:>9s}{a['minutes_per_run']:>9.0f}\n")
+        t.append(line, style="bold green" if s == best else "")
+    t.append("\nPer task (each run: share of hidden tests passed, ✓ = solved)\n", style="bold")
+    setups = list(p["setups"])
+    cells = {}
+    for r in p["rows"]:
+        mark = "run" if r["status"] != "done" else ("✓" if r["reward"] == 1 else
+                                                    "-" if r["tests"] is None else f"{r['tests']:.0%}")
+        cells.setdefault(r["task"], {}).setdefault(r["setup"], []).append(mark)
+    for task in sorted(cells):
+        t.append(f"{_short(task, 30):31s}", style="")
+        for s in setups:
+            marks = " ".join(cells[task].get(s, []))
+            t.append(f"{s[:12]}: ", style="dim")
+            t.append(f"{marks:12s} ", style="bold green" if "✓" in marks else "")
+        t.append("\n")
+    t.append("\nSolved = all hidden tests pass. Cost = tokens x API list price.", style="dim")
+    return t
+
+
+HELP = """[b]What you are looking at[/b]
+Left: every run (newest first). Type in the box to filter, e.g. [b]ho4 glmreview26[/b] or [b]running[/b].
+Overview: the run as a tree: plan, each step, who built it, the senior review and what it sent back.
+Who did what: one line per action, by role (PLANNER, ROUTER, WORKER, REVIEWER, ...).
+Steps / Worker turns: the routing table and the worker's own thoughts and commands.
+Details / Raw events / Harbor log: tokens and spend, the raw trace, Harbor's own output.
+
+[b]Keys[/b]
+n  start a run: pick a task and an evaluation setup (it fills in the config, policy and limits)
+c  compare: results of an evaluation (solved, tests passed, tokens, cost) and how far it is
+/  jump to the filter    s  stop the selected run    r  refresh    ?  this help    q  quit
+
+[b]Words[/b]
+Solved = all of the task's hidden tests pass (Harbor reward 1). Tests passed = share of them that pass.
+Cost = tokens x the API list price; nothing is billed per token (subscriptions)."""
+
+
 
 def _k(n) -> str:
     n = float(n or 0)
@@ -865,6 +936,9 @@ class NewRunScreen(ModalScreen):
             yield Label("New run", id="title")
             yield Label("Task")
             yield Select(J.TASKS, value=J.SMOKE_TASK, allow_blank=False, id="task")
+            yield Label("Evaluation setup (fills in the config, policy and limits below)")
+            yield Select([("custom: set them yourself", "")] + [(s, s) for s in SETUPS], value="",
+                         allow_blank=False, id="setup")
             yield Label("Backend config (tiers, planner, prices)")
             yield Select([(c, f"configs/{c}") for c in configs], value=f"configs/{default_cfg}",
                          allow_blank=False, id="config")
@@ -885,11 +959,26 @@ class NewRunScreen(ModalScreen):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
+        self._setup_caps: dict = {}
         self._update()
 
+    def _apply_setup(self, setup: str) -> None:
+        if not setup:
+            self._setup_caps = {}
+            return
+        cfg_select = self.query_one("#config", Select)
+        v = setup_values(setup, [f"configs/{p.name}" for p in (ROOT / "configs").glob("phase2-*.json")])
+        self.query_one("#policy", Select).value = v["policy"]
+        if "config" in v:
+            cfg_select.value = v["config"]
+        for key in ("max_plan_steps", "worker_step_limit", "step_idle_sec"):
+            if key in v["caps"]:
+                self.query_one(f"#{key}", Input).value = v["caps"][key]
+        self._setup_caps = v["caps"]
+
     def _values(self) -> dict:
-        caps = {k: self.query_one(f"#{k}", Input).value.strip()
-                for k in ("max_plan_steps", "worker_step_limit", "step_idle_sec")}
+        caps = {**getattr(self, "_setup_caps", {}), **{k: self.query_one(f"#{k}", Input).value.strip()
+                for k in ("max_plan_steps", "worker_step_limit", "step_idle_sec")}}
         return {"task": self.query_one("#task", Select).value, "config": self.query_one("#config", Select).value,
                 "policy": self.query_one("#policy", Select).value, "caps": caps,
                 "job_name": self.query_one("#job_name", Input).value.strip()}
@@ -909,6 +998,8 @@ class NewRunScreen(ModalScreen):
         self.query_one("#preview", Static).update(Text(" ".join(cmd[2:]).replace(str(ROOT) + "/", ""), style="dim"))
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "setup":
+            self._apply_setup(str(event.value or ""))
         self._update()
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -924,6 +1015,52 @@ class NewRunScreen(ModalScreen):
             self.dismiss(v)
         else:
             self.dismiss(None)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class ResultsScreen(ModalScreen):
+    """Compare: an evaluation's results by setup and task, refreshed while it runs."""
+    BINDINGS = [Binding("escape,c,q", "dismiss_none", "Close")]
+
+    def __init__(self, root: Path):
+        super().__init__()
+        self.root = root
+        self.prefixes = R.prefixes(root)
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="results"):
+            yield Label("Results  (Esc to close)", id="title")
+            if self.prefixes:
+                yield Select([(p, p) for p in self.prefixes], value=self.prefixes[0], allow_blank=False,
+                             id="prefix")
+            yield Static(id="table")
+
+    def on_mount(self) -> None:
+        self.show()
+        self.set_interval(30, self.show)
+
+    def show(self) -> None:
+        if not self.prefixes:
+            self.query_one("#table", Static).update(Text("No evaluations under jobs/ yet.", style="dim"))
+            return
+        prefix = str(self.query_one("#prefix", Select).value)
+        self.query_one("#table", Static).update(results_text(R.progress(self.root, prefix)))
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        self.show()
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+class HelpScreen(ModalScreen):
+    BINDINGS = [Binding("escape,question_mark,q", "dismiss_none", "Close")]
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="help"):
+            yield Static(HELP)
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)
@@ -967,7 +1104,10 @@ class HarnessTUI(App):
     #roles { height: auto; padding: 1 1; }
     TabbedContent { height: 1fr; }
     RichLog { height: 1fr; }
-    NewRunScreen, ConfirmScreen { align: center middle; }
+    NewRunScreen, ConfirmScreen, ResultsScreen, HelpScreen { align: center middle; }
+    #filter { margin: 0 0 1 0; }
+    #results { width: 120; height: 90%; border: thick $accent; background: $surface; padding: 1 2; }
+    #help { width: 110; height: auto; max-height: 90%; border: thick $accent; background: $surface; padding: 1 2; }
     #dialog { width: 90; height: auto; max-height: 90%; border: thick $accent; background: $surface; padding: 1 2; }
     #confirm { width: 70; height: auto; border: thick $error; background: $surface; padding: 1 2; }
     #title { text-style: bold; margin-bottom: 1; }
@@ -977,8 +1117,10 @@ class HarnessTUI(App):
     #buttons Button { margin-right: 2; }
     #preview { margin-top: 1; }
     """
-    BINDINGS = [Binding("n", "new_run", "New run"), Binding("s", "stop_run", "Stop run"),
-                Binding("r", "refresh", "Refresh"), Binding("q", "quit", "Quit")]
+    BINDINGS = [Binding("n", "new_run", "New run"), Binding("c", "compare", "Compare results"),
+                Binding("slash", "focus_filter", "Filter"), Binding("s", "stop_run", "Stop run"),
+                Binding("r", "refresh", "Refresh"), Binding("question_mark", "help", "Help"),
+                Binding("q", "quit", "Quit")]
 
     def __init__(self, root: Path = ROOT, launcher=J.start_run, stopper=J.stop_run, poll_sec: float = 2.0):
         super().__init__()
@@ -988,12 +1130,16 @@ class HarnessTUI(App):
         self._list_sig = None
         self._view_sig = None
         self._collapsed: set[str] = set()
+        self.query_text = ""
+        self.shown: list[J.Job] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal():
             with Vertical(id="sidebar"):
                 yield Button("+ New run  [n]", id="new", variant="primary")
+                yield Button("Compare results  [c]", id="compare")
+                yield Input(placeholder="filter: e.g. ho4 running  [/]", id="filter")
                 yield ListView(id="jobs")
             with Vertical(id="main"):
                 yield Static(id="meta")
@@ -1025,21 +1171,25 @@ class HarnessTUI(App):
 
     async def refresh_all(self) -> None:
         self.jobs = J.list_jobs(self.root / "jobs")
-        sig = [(j.name, j.status) for j in self.jobs]
+        self.shown = [j for j in self.jobs if job_matches(j.name, j.status, self.query_text)]
+        running = sum(j.status == "running" for j in self.jobs)
+        self.sub_title = f"{running} running · {len(self.jobs)} runs" + (
+            f" · {len(self.shown)} match the filter" if self.query_text else "")
+        sig = ([(j.name, j.status) for j in self.shown], self.query_text)
         if sig != self._list_sig:
             self._list_sig = sig
             lv = self.query_one("#jobs", ListView)
             await lv.clear()
             items = []
-            for j in self.jobs:
+            for j in self.shown:
                 label = Text(f"{STATUS_ICON.get(j.status, '?')} ", style=STATUS_STYLE.get(j.status, ""))
                 label.append(j.name)
                 label.append(f"\n  {j.status}" + (f" · reward {j.reward}" if j.reward is not None else ""), style="dim")
                 items.append(ListItem(Label(label)))
             await lv.extend(items)
-            if self.selected is None and self.jobs:
-                self.selected = self.jobs[0].name
-            names = [j.name for j in self.jobs]
+            if self.selected is None and self.shown:
+                self.selected = self.shown[0].name
+            names = [j.name for j in self.shown]
             if self.selected in names:
                 lv.index = names.index(self.selected)
         self.render_job()
@@ -1051,7 +1201,8 @@ class HarnessTUI(App):
         job = self.current()
         meta = self.query_one("#meta", Static)
         if not job:
-            meta.update(Text("No jobs yet. Press n to start a run.", style="dim"))
+            meta.update(Text("No jobs yet. Press n to start a run, or ? for help." if not self.jobs else
+                             "No run matches the filter.", style="dim"))
             return
         events = J.read_events(job.agent_dir)
         workers = J.worker_files(job.agent_dir)
@@ -1140,8 +1291,8 @@ class HarnessTUI(App):
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         lv = self.query_one("#jobs", ListView)
-        if lv.index is not None and lv.index < len(self.jobs):
-            name = self.jobs[lv.index].name
+        if lv.index is not None and lv.index < len(self.shown):
+            name = self.shown[lv.index].name
             if name != self.selected:
                 self.selected = name
                 self._collapsed.clear()
@@ -1150,6 +1301,26 @@ class HarnessTUI(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "new":
             self.action_new_run()
+        elif event.button.id == "compare":
+            self.action_compare()
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "filter":
+            self.query_text = event.value.strip()
+            await self.refresh_all()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "filter":  # Enter: back to the list, so the keys work again
+            self.query_one("#jobs", ListView).focus()
+
+    def action_focus_filter(self) -> None:
+        self.query_one("#filter", Input).focus()
+
+    def action_compare(self) -> None:
+        self.push_screen(ResultsScreen(self.root))
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
 
     def action_new_run(self) -> None:
         def started(values):

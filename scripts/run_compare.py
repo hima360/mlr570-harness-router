@@ -9,9 +9,6 @@ routed = Laya routing, up to 5 steps, chains merged, escalation and handler on; 
 merging chains. Jobs are named <prefix>-<setup>-<task> under jobs/; an existing job is skipped.
 """
 import argparse
-import collections
-import glob
-import json
 import os
 import sys
 import time
@@ -20,36 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-BASE = {"max_plan_steps": "1", "worker_step_limit": "80", "step_wall_time_sec": "2700",
-        "max_interventions": "0", "max_escalations": "0"}
-ROUTED = {"max_plan_steps": "5", "worker_step_limit": "40", "step_wall_time_sec": "1800"}
-# --long: Terminal-Bench allows hours per task; give the agents room to verify (2026-10-27: agents submitted
-# early, sure they were done)
-LONG = {"worker_step_limit": "80", "step_wall_time_sec": "3600", "submit_checks": "3"}
-SETUPS = {  # name: (policy, caps[, config overriding --config])
-    "haiku": ("fixed:0", BASE),
-    "sonnet": ("fixed:1", BASE),
-    "opus": ("fixed:2", BASE),
-    "routed": ("laya", ROUTED),
-    "split": ("laya", {**ROUTED, "merge_chains": "false"}),
-    "planner": ("planner", ROUTED),
-    "levers": ("planner", {**ROUTED, **{"worker_step_limit": "80", "step_wall_time_sec": "3600", "submit_checks": "3"}},
-               "configs/phase2-droid-levers.json"),
-    # Lead + helpers: the baseline's single agent and budget, plus `delegate` to cheaper helpers
-    # (configs/phase2-droid-lead.json = the eval config + helper_models). Only delegation differs from opus/sonnet.
-    "leadopus": ("fixed:2", BASE, "configs/phase2-droid-lead.json"),
-    "leadsonnet": ("fixed:1", BASE, "configs/phase2-droid-lead.json"),
-    # Sonnet builds, Opus reviews on submit (configs/phase2-droid-review.json = the eval config + senior reviewer).
-    "review": ("fixed:1", BASE, "configs/phase2-droid-review.json"),
-    # v2.5: v2 plus measure-the-targets (worker) and evidence-backed review (reviewer).
-    "review25": ("fixed:1", BASE, "configs/phase2-droid-review25.json"),
-    # The same three with GLM-5.3 Flash as the builder (Factory dropped Sonnet 5.5 on 2026-10-29); Opus reviews.
-    "glm": ("fixed:1", BASE, "configs/phase2-droid-glm.json"),
-    "glmreview": ("fixed:1", BASE, "configs/phase2-droid-glm-review.json"),
-    "glmreview25": ("fixed:1", BASE, "configs/phase2-droid-glm-review25.json"),
-    # v2.6: v2.5 plus the clock (time and commands used after every command, wrap up at 70%).
-    "glmreview26": ("fixed:1", BASE, "configs/phase2-droid-glm-review26.json"),
-}
+from phase2.setups import BASE, LONG, ROUTED, SETUPS  # noqa: E402  (re-exported for supervise.py)
 
 
 def run(config: str, prefix: str, parallel: int, tasks: list[str], setups=None, long=False, repeats: int = 1) -> None:
@@ -82,54 +50,22 @@ def run(config: str, prefix: str, parallel: int, tasks: list[str], setups=None, 
     log.write("ALL DONE\n")
 
 
-def tests_fraction(trial: str) -> float | None:
-    """Share of the task's own tests that passed (ctrf.json), or its partial score (reward.json)."""
-    for f in glob.glob(trial + "/verifier/ctrf.json"):
-        s = json.load(open(f))["results"]["summary"]
-        return s["passed"] / s["tests"] if s.get("tests") else None
-    for f in glob.glob(trial + "/verifier/reward.json"):
-        d = json.load(open(f))
-        return d.get("partial_score", d.get("reward"))
-    return None
-
-
 def summary(prefix: str) -> None:
-    from phase2.list_prices import trace_usd
+    from phase2.results import by_setup, collect
 
-    rows, agg = [], collections.defaultdict(lambda: collections.Counter())
-    for d in sorted(glob.glob(f"{ROOT}/jobs/{prefix}-*/")):  # pathlib would drop the trailing slash
-        if not os.path.isdir(d):
+    rows = collect(ROOT, prefix)
+    for r in rows:
+        if r["status"] != "done":
+            print(f"{r['task']:28s} {r['setup']:7s} running")
             continue
-        _, setup, task = os.path.basename(d.rstrip("/")).split("-", 2)
-        task = task.rsplit("-r", 1)[0] if task.rsplit("-r", 1)[-1].isdigit() else task
-        trials = [t for t in glob.glob(d + "*/") if os.path.exists(t + "result.json")]
-        if not trials:
-            rows.append((task, setup, "running")); continue
-        t = trials[0]
-        r = json.load(open(t + "result.json"))
-        ar, exc = r.get("agent_result") or {}, (r.get("exception_info") or {}).get("exception_type")
-        reward = ((r.get("verifier_result") or {}).get("rewards") or {}).get("reward")
-        ev = [json.loads(l) for l in open(t + "agent/trace.jsonl")] if os.path.exists(t + "agent/trace.jsonl") else []
-        credits = sum(e.get("factory_credits") or 0 for e in ev if e["event"] == "llm_call")
-        list_usd = trace_usd(ev)  # API list price of the same tokens (phase2.list_prices)
-        tokens = sum((e.get("input_tokens") or 0) + (e.get("output_tokens") or 0) for e in ev if e["event"] == "llm_call")
-        frac, mins = tests_fraction(t), (ev[-1]["t"] / 60 if ev else 0)
-        models = ",".join(sorted({e["model"].split("/")[-1] for e in ev if e["event"] in ("attempt", "helper_end")}))
-        rows.append((task, setup, f"reward={reward} tests={'-' if frac is None else f'{frac:.2f}'} "
-                                  f"${list_usd:.2f} {tokens / 1e6:.2f}Mtok {credits:,.0f}cr {mins:.0f}min {models} {exc or ''}"))
-        a = agg[setup]
-        a["runs"] += 1; a["valid"] += exc is None; a["passed"] += reward == 1.0
-        a["usd"] += list_usd; a["credits"] += credits; a["minutes"] += mins; a["tokens"] += tokens
-        a["frac"] += frac or 0
-    for row in rows:
-        print(f"{row[0]:28s} {row[1]:7s} {row[2]}")
+        tests = "-" if r["tests"] is None else f"{r['tests']:.2f}"
+        print(f"{r['task']:28s} {r['setup']:7s} reward={r['reward']} tests={tests} ${r['usd']:.2f} "
+              f"{r['tokens'] / 1e6:.2f}Mtok {r['credits']:,.0f}cr {r['minutes']:.0f}min {r['models']} {r['exc']}")
     print()
-    for s, a in agg.items():
-        per = lambda k: a[k] / a["passed"] if a["passed"] else float("nan")
-        print(f"{s:7s} runs={a['runs']} valid={a['valid']} passed={a['passed']} mean_tests={a["frac"] / max(a["valid"], 1):.2f} "
+    for s, a in by_setup(rows).items():
+        print(f"{s:7s} runs={a['runs']} valid={a['valid']} passed={a['passed']} mean_tests={a['mean_tests']:.2f} "
               f"usd={a['usd']:.2f} tokens={a['tokens'] / 1e6:.2f}M credits={a['credits']:,.0f} minutes={a['minutes']:.0f} "
-              f"credits/solve={per('credits'):,.0f} usd/solve={per('usd'):.2f}")
-
+              f"credits/solve={a['credits_per_solve']:,.0f} usd/solve={a['usd_per_solve']:.2f}")
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
