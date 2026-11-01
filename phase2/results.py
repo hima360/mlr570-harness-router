@@ -74,6 +74,8 @@ def by_setup(rows: list[dict]) -> dict[str, dict]:
         for k in ("usd", "credits", "minutes", "tokens"):
             a[k] += r[k]
         a["frac"] += r["tests"] or 0
+        a["limit_hits"] += r["exit"] in ("TimeExceeded", "LimitsExceeded")  # v2.6 targets these: never reviewed
+        a["reviewed"] += r["reviews"] > 0
     out = {}
     for s, a in agg.items():
         per = lambda k: a[k] / a["passed"] if a["passed"] else float("nan")

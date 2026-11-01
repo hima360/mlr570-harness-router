@@ -65,12 +65,13 @@ def results_text(p: dict) -> Text:
         t.append("No finished runs yet.", style="dim")
         return t
     best = max(p["setups"].items(), key=lambda kv: (kv[1]["passed"], -kv[1]["usd"]))[0]
-    t.append(f"{'setup':14s}{'solved':>9s}{'tests':>8s}{'tokens':>9s}{'cost':>9s}{'$/solve':>9s}{'min/run':>9s}\n",
-             style="bold")
+    t.append(f"{'setup':14s}{'solved':>9s}{'tests':>8s}{'tokens':>9s}{'cost':>9s}{'$/solve':>9s}{'min/run':>9s}"
+             f"{'hit limit':>11s}{'reviewed':>10s}\n", style="bold")
     for s, a in p["setups"].items():
         per = "-" if a["passed"] == 0 else f"${a['usd_per_solve']:.2f}"
         line = (f"{s:14s}{a['passed']:>4d}/{a['runs']:<4d}{a['mean_tests']:>8.0%}{a['tokens'] / 1e6:>8.1f}M"
-                f"{'$' + format(a['usd'], '.2f'):>9s}{per:>9s}{a['minutes_per_run']:>9.0f}\n")
+                f"{'$' + format(a['usd'], '.2f'):>9s}{per:>9s}{a['minutes_per_run']:>9.0f}"
+                f"{a['limit_hits']:>11d}{a['reviewed']:>10d}\n")
         t.append(line, style="bold green" if s == best else "")
     t.append("\nPer task (each run: share of hidden tests passed, ✓ = solved)\n", style="bold")
     setups = list(p["setups"])
@@ -86,7 +87,8 @@ def results_text(p: dict) -> Text:
             t.append(f"{s[:12]}: ", style="dim")
             t.append(f"{marks:12s} ", style="bold green" if "✓" in marks else "")
         t.append("\n")
-    t.append("\nSolved = all hidden tests pass. Cost = tokens x API list price.", style="dim")
+    t.append("\nSolved = all hidden tests pass. Cost = tokens x API list price. Hit limit = ended by the time or "
+             "command limit before submitting. Reviewed = got the senior review.", style="dim")
     return t
 
 

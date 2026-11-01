@@ -64,11 +64,13 @@ def build(rows: list[dict], title: str, labels: dict[str, str]) -> str:
         return "".join(out)
     best = max(agg.items(), key=lambda kv: (kv[1]["passed"], -kv[1]["usd"]))[0]
     out.append("<h2>By setup</h2><div class='wrap'><table><tr><th>Setup</th><th>Runs</th><th>Solved</th>"
-               "<th>Tests passed</th><th>Tokens</th><th>Total cost</th><th>Cost per solve</th><th>Min per run</th></tr>")
+               "<th>Tests passed</th><th>Tokens</th><th>Total cost</th><th>Cost per solve</th><th>Min per run</th>"
+               "<th>Hit a limit</th><th>Reviewed</th></tr>")
     for s, a in agg.items():
         out.append(f"<tr class='{'best' if s == best else ''}'><td>{name(s)}</td><td>{a['runs']}</td>"
                    f"<td>{a['passed']} / {a['runs']}</td><td>{a['mean_tests']:.0%}</td><td>{a['tokens'] / 1e6:.1f}M</td>"
-                   f"<td>{_money(a['usd'])}</td><td>{_money(a['usd_per_solve'])}</td><td>{a['minutes_per_run']:.0f}</td></tr>")
+                   f"<td>{_money(a['usd'])}</td><td>{_money(a['usd_per_solve'])}</td><td>{a['minutes_per_run']:.0f}</td>"
+                   f"<td>{a['limit_hits']}</td><td>{a['reviewed']}</td></tr>")
     out.append("</table></div><h2>Total cost</h2><div class='bars'>")
     top = max(a["usd"] for a in agg.values()) or 1
     for s, a in agg.items():
@@ -96,7 +98,8 @@ def build(rows: list[dict], title: str, labels: dict[str, str]) -> str:
             out.append(f"<td>{''.join(badges)}</td>")
         out.append("</tr>")
     out.append("</table></div><p class='note'>Solved = all hidden tests pass (Harbor reward 1). Tests passed = share "
-               "of the task's hidden tests that pass. Cost = tokens x API list price; nothing is billed per token."
+               "of the task's hidden tests that pass. Cost = tokens x API list price; nothing is billed per token. "
+               "Hit a limit = the run ended at its time or command limit before submitting. Reviewed = it got the senior review."
                "</p></main></body></html>")
     return "".join(out)
 
