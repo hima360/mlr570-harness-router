@@ -1707,3 +1707,21 @@ def test_local_dockerfile_keeps_the_ignore_list_on_one_line():
 
     line = next(l for l in L.DOCKERFILE.format(image="x").splitlines() if "info/exclude" in l)
     assert "*.pyc" in line and "\\n" in line  # a real newline would break the Dockerfile
+
+
+def test_harness_wizard_and_check_guess(tmp_path, monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("harness_cli", os.path.join(os.path.dirname(__file__), "..", "scripts", "harness.py"))
+    h = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(h)
+    (tmp_path / "tests").mkdir()
+    assert h.guess_check(tmp_path) == "python -m pytest -q"
+    (tmp_path / "package.json").write_text("{}")
+    assert h.guess_check(tmp_path) == "npm test"
+    calls = []
+    monkeypatch.setattr(h, "main", lambda argv: calls.append(argv) or 0)
+    answers = iter(["1", str(tmp_path), "fix the bug", ""])
+    h.wizard(ask=lambda q: next(answers))
+    assert calls == [["run", "fix the bug", str(tmp_path), "--check", "npm test"]]
+    assert h.wizard(ask=lambda q: "4") == 0 and calls[-1] == ["doctor"]

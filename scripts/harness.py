@@ -1,4 +1,4 @@
-"""One entry point for people (./harness from the repo root):
+"""One entry point for people (./harness from the repo root). With nothing after it, it asks you what to do.
 
   ./harness run "fix the failing login test" ~/my-project --check "pytest -q"   your task, your folder
   ./harness try                                                             try it on a tiny bundled project
@@ -82,6 +82,57 @@ def cmd_run(a) -> int:
     return 0
 
 
+def guess_check(folder: Path) -> str:
+    """A sensible default check for a project, from what is in it ("" = none found)."""
+    if (folder / "package.json").exists():
+        return "npm test"
+    if any(folder.glob("test*.py")) or (folder / "tests").is_dir() or (folder / "pytest.ini").exists():
+        return "python -m pytest -q" if (folder / "tests").is_dir() or (folder / "pytest.ini").exists() \
+            else "python -m unittest -q"
+    if (folder / "Cargo.toml").exists():
+        return "cargo test"
+    if (folder / "go.mod").exists():
+        return "go test ./..."
+    return ""
+
+
+def projects(base: Path = Path.home() / "Developer") -> list[Path]:
+    """Folders under ~/Developer that look like projects (git repos), most recently changed first."""
+    found = [d for d in base.iterdir() if d.is_dir() and (d / ".git").exists()] if base.is_dir() else []
+    return sorted(found, key=lambda d: d.stat().st_mtime, reverse=True)
+
+
+def wizard(ask=input) -> int:
+    """`./harness` with nothing after it: plain questions instead of flags."""
+    print("What do you want to do?\n  1  give it a task on one of my projects\n  2  try it on a tiny example project\n"
+          "  3  watch runs and results (live view)\n  4  check my setup")
+    choice = ask("Choose 1-4: ").strip()
+    if choice == "2":
+        return main(["try"])
+    if choice == "3":
+        return main(["tui"])
+    if choice == "4":
+        return main(["doctor"])
+    if choice != "1":
+        print("Nothing chosen.")
+        return 0
+    found = projects()
+    for i, d in enumerate(found[:15], 1):
+        print(f"  {i:2d}  {d.name}")
+    pick = ask("Project number, or a folder path: ").strip()
+    folder = found[int(pick) - 1] if pick.isdigit() and 0 < int(pick) <= len(found[:15]) else Path(pick).expanduser()
+    if not folder.is_dir():
+        print(f"There is no folder at {folder}.")
+        return 2
+    task = ask("What should it do? (one or two sentences): ").strip()
+    if not task:
+        print("No task given.")
+        return 0
+    default = guess_check(folder)
+    check = ask(f"Command that should pass when it is done [{default or 'none'}] (Enter to accept): ").strip() or default
+    return main(["run", task, str(folder), *(["--check", check] if check else [])])
+
+
 def cmd_doctor(_a) -> int:
     import supervise
 
@@ -109,7 +160,7 @@ def cmd_doctor(_a) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="harness", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
     r = sub.add_parser("run", help="work on your own task in a copy of your folder")
     r.add_argument("instruction")
     r.add_argument("folder", nargs="?", default=".")
@@ -126,6 +177,8 @@ def main(argv=None) -> int:
     rp = sub.add_parser("report", help="write a results page")
     rp.add_argument("prefixes", nargs="+")
     a = ap.parse_args(argv)
+    if a.cmd is None:
+        return wizard()
     if a.cmd == "run":
         return cmd_run(a)
     if a.cmd == "try":
