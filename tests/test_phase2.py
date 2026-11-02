@@ -1843,3 +1843,45 @@ def test_v31_spec_card_and_handoff_reach_every_role(tmp_path, monkeypatch):
     assert "files (2 levels)" in builder[2]
     assert any("/app/out.csv" in p and "senior engineer" in p for p in prompts)
     assert "/app/out.csv" in takeover[1] and "WORKS: parser" in takeover[2]
+
+
+def test_v33_progress_gate_stops_an_attempt_whose_work_stopped_changing():
+    from phase2.planner import Step
+    from phase2.worker import STALL_MARK
+
+    env = FakeEnvironment(lambda cmd: ("ok\n", 0))
+
+    async def main(changing):
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = _scripted_model([f"echo {i}" for i in range(30)])
+        seen = iter(range(1000))
+        cfg = load_config(progress_block=3, progress_patience=2, worker_step_limit=30)
+        return await asyncio.to_thread(
+            run_worker, cfg, None, "zai/glm-5.3-flash", adapter, task_overall="T", step=Step(id="s1", goal="g"),
+            blackboard_text="-", model=model, progress_probe=(lambda: next(seen)) if changing else (lambda: "same"))
+
+    res = asyncio.run(main(False))
+    assert res.exit_status == "Submitted" and res.summary.startswith(STALL_MARK) and res.n_calls <= 10
+    res = asyncio.run(main(True))
+    assert not res.summary.startswith(STALL_MARK)
+
+
+def test_v34_takeover_runs_at_the_configured_effort(tmp_path, monkeypatch):
+    import types
+
+    import phase2.agent as A
+
+    efforts = []
+
+    def fake_run_worker(cfg, ledger, model_id, adapter, *, step, **kw):
+        efforts.append((model_id, step.effort))
+        return WorkerResult("Submitted", "done", 3)
+
+    monkeypatch.setattr(A, "run_worker", fake_run_worker)
+    monkeypatch.setattr(A, "chat", lambda *a, **k: '{"verdict": "fix", "problems": [{"what": "x"}]}')
+    env = FakeEnvironment(lambda c: ("ok\n", 0) if "cp -a" in c else ("/app\n", 0))
+    agent = A.RoutedHarness(logs_dir=tmp_path, model_name=None, policy="fixed:1", max_plan_steps="1",
+                            senior_reviewer_model="anthropic/claude-opus-5-5", takeover_model="anthropic/claude-opus-5-5",
+                            takeover_effort="low")
+    asyncio.run(agent.run("t", env, types.SimpleNamespace(metadata=None)))
+    assert efforts[0][1] != "low" and efforts[1] == ("anthropic/claude-opus-5-5", "low")

@@ -132,6 +132,13 @@ class HarnessConfig:
     # v3.1 context engineering: spec_model turns the task into a checklist that the builder, judge and takeover all
     # see ("" = off); repo_map adds a two-level file map and language counts to the starting listing; handoff makes
     # the builder leave /tmp/HANDOFF.md (works / fails / files) that the takeover reads instead of a long digest.
+    # v3.3: the takeover's budget is renewed only while its work changes: every progress_block commands the work
+    # folder is fingerprinted; progress_patience blocks in a row without change end the attempt (0 = off).
+    # v3.4: reasoning effort of the takeover model ("" = its configured default). 2026-11-02: output is 51% of Opus
+    # spend in v2.8 (1.28M output tokens, $25.67 of $50.53 over 905 takeover+judge calls), mostly reasoning.
+    takeover_effort: str = ""
+    progress_block: int = 0
+    progress_patience: int = 2
     spec_model: str = ""
     repo_map: bool = False
     handoff: bool = False

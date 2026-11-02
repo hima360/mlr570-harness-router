@@ -129,6 +129,44 @@ class SubmitGate:
 CHECKPOINT_MARK = "(No report: the harness submitted"
 
 
+STALL_MARK = "(No report: the harness stopped this attempt"
+
+
+class ProgressEnv:
+    """v3.3: a budget that is renewed only while the work changes. Every `block` commands the harness takes a
+    fingerprint of the work folder (`probe()`); after `patience` blocks in a row with no change, it submits for the
+    worker. dv8: the heat-pump takeover ran 57 commands for 0%; late solves (vpp 47, sglang 59 calls) kept editing."""
+
+    def __init__(self, inner, calls, probe, block: int = 12, patience: int = 2):
+        self.inner, self.calls, self.probe, self.block, self.patience = inner, calls, probe, block, patience
+        self.last, self.flat, self.next_at = None, 0, block
+
+    def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
+        from minisweagent.exceptions import Submitted
+
+        out = self.inner.execute(action, cwd, timeout=timeout)
+        if self.calls() >= self.next_at:
+            self.next_at = self.calls() + self.block
+            try:
+                fp = self.probe()
+            except Exception:
+                fp = None
+            if fp is not None and fp == self.last:
+                self.flat += 1
+            else:
+                self.flat = 0
+            self.last = fp if fp is not None else self.last
+            if self.flat >= self.patience:
+                report = (f"{STALL_MARK}: the work folder did not change in the last {self.block * self.patience} "
+                          f"commands. Last command output: {(out.get('output') or '')[-400:]})")
+                raise Submitted({"role": "exit", "content": report, "extra": {"exit_status": "Submitted",
+                                                                              "submission": report}})
+        return out
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
 class ClockEnv:
     """v2.6: ends every command's output with the time and commands used, and once either passes `wrap_frac`, tells
     the worker to finish and submit (and again at 90%), so its submit and the senior review happen before a limit
@@ -366,7 +404,8 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
 
 
 def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, step, blackboard_text: str,
-               model=None, output_path=None, on_call=None, run_helpers=None, senior=None) -> WorkerResult:
+               model=None, output_path=None, on_call=None, run_helpers=None, senior=None,
+               progress_probe=None) -> WorkerResult:
     """Blocking: call inside asyncio.to_thread. `model` is injectable for tests; `on_call(info)` gets
     one record per model call. With `run_helpers` (phase2.delegate) this worker leads: its `delegate`
     commands run helper models and their reports are the command output."""
@@ -401,6 +440,8 @@ def run_worker(cfg, ledger, model_id: str, env_adapter, *, task_overall: str, st
         env = ClockEnv(env, lambda: agent.n_calls, step_limit, wall_sec, cfg.wrap_up_frac,
                        checkpoint_frac=cfg.checkpoint_frac if senior is not None else 0.0,
                        checkpoint_ok=lambda: gate.senior_left > 0)
+    if progress_probe is not None and cfg.progress_block:  # v3.3: stop an attempt whose work stopped changing
+        env = ProgressEnv(env, lambda: agent.n_calls, progress_probe, cfg.progress_block, cfg.progress_patience)
     gate = SubmitGate(env, step, cfg.check_timeout, cfg.submit_checks)
     agent = DefaultAgent(
         model, gate,

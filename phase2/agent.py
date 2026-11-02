@@ -39,7 +39,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "senior_fix_model", "senior_fix_step_limit", "measure_targets", "clock",
                "wrap_up_frac", "strategy_model", "checkpoint_frac", "takeover_model", "takeover_first_step_limit",
                "takeover_first_wall_sec", "takeover_step_limit", "takeover_fix_first_max_problems",
-               "takeover_fix_step_limit", "spec_model", "repo_map", "handoff")
+               "takeover_fix_step_limit", "spec_model", "repo_map", "handoff", "progress_block",
+               "progress_patience", "takeover_effort")
 
 
 class RoutedHarness(BaseAgent):
@@ -310,7 +311,8 @@ class RoutedHarness(BaseAgent):
             listed = "\n".join(f"{i}. {p['what']}" + (f"\n   fix: {p['fix']}" if p.get("fix") else "")
                                 for i, p in enumerate(probs, 1)) or "(the review gave no details; check everything)"
             nxt = step.model_copy(update={"goal": TAKEOVER_GOAL.format(goal=step.goal + card, problems=listed),
-                                          "worker_step_limit": self.cfg.takeover_step_limit})
+                                          "worker_step_limit": self.cfg.takeover_step_limit,
+                                          "effort": self.cfg.takeover_effort or step.effort})
             notes = attempt_digest(messages, 4000) or "(none)"
             if self.cfg.handoff:  # v3.1: the builder's own handoff note, plus a short digest
                 try:
@@ -325,9 +327,13 @@ class RoutedHarness(BaseAgent):
             path = Path(output_path).with_name(Path(output_path).stem + "_takeover.json") if output_path else None
             trace.log("takeover", step=step.id, model=self.cfg.takeover_model, problems=probs, phase="start")
             with report_failures(lambda info: trace.log("llm_call_failed", role="takeover", step=step.id, **info)):
+                import hashlib
+
+                probe = (lambda: hashlib.md5(current_diff(400000).encode()).hexdigest()) if self.cfg.progress_block \
+                    else None
                 second = run_worker(self.cfg, ledger, self.cfg.takeover_model, adapter, task_overall=instruction,
                                     step=nxt, blackboard_text="Notes of the engineer before you:\n" + notes,
-                                    output_path=path,
+                                    output_path=path, progress_probe=probe,
                                     on_call=lambda info: trace.log("llm_call", role="takeover", step=step.id, **info))
             trace.log("takeover", step=step.id, model=self.cfg.takeover_model, phase="end",
                       exit_status=second.exit_status, n_calls=second.n_calls, summary=second.summary[:300])
