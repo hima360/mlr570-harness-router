@@ -89,3 +89,4 @@ Candidate improvements (from dt1/dv8 traces)
 - 22:50 Droid hit its 5-hour usage limit ("You've reached your 5-hour Droid Core usage limit", resets ~23:47; read from
   ~/.factory/logs). Droid usage is now the scarce resource before expiry. Priority: v3.5 dev (dv13, cheap,
   evidence-backed) -> held-out confirmation of the best version. Stopped dv11 (v3.1: 2/6 vs v2.8 3/6, costlier).
+- 00:25 v3.5 dev so far 4/9 $3.31 vs v2.8 4/9 $6.57 on the same tasks (3 running: payments, risk-scorer, vf2). jobs/ho_v35.chain.sh confirms on held-out ho5+ho4 automatically if v3.5 ends with solves >= v2.8 at lower cost.
