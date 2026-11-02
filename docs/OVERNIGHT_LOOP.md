@@ -64,3 +64,10 @@ Candidate improvements (from dt1/dv8 traces)
   commands of work in /tmp and site-packages that the diff fingerprint cannot see; gate would stop it; saving ~$3.5 is
   too small for the $9 gap. Cost split of 905 Opus takeover+judge calls: output $25.67 (51%), fresh input $19.99 (40%),
   cache reads $4.87. => v3.4: takeover at low reasoning effort (red team pending).
+- 22:00 red team on v3.4 (low-effort takeover): build with guards. 836/905 replies are cut at 300 chars in traces, so
+  "output = reasoning" is unproven; long calls (>2000 tok, likely heredoc file writes) carry 53% of takeover output;
+  solves with long calls (hof, atrx, payments, nextjs) are at risk; a win from an effort knob is drift (tunes the
+  strong model, not routing) and would need Opus-alone-at-low for fairness. => 2-task probe only (dv12: payments,
+  html-js); keep rule: takeover solves kept, output/call -40%, calls +<=20%, Opus cost -20%.
+  Next on-thesis cost lever (WHAT THEY KNOW): per-role context - the takeover gets compacted observations and the
+  handoff instead of full 10k-char outputs (fresh input is 40% of Opus spend).

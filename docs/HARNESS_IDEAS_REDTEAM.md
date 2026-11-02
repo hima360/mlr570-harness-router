@@ -96,3 +96,21 @@ Literature named here is from memory (Unverified for exact numbers); our own num
 ## Order for tonight
 6 (stall trigger) and 7 (progress budget): cost, low risk. Then 3 (tester as evidence), then 11 (router), then 1.
 Each as its own version on the 12 dev tasks; kept by the rule in OVERNIGHT_LOOP.md.
+
+## 12. From DeepSeek Harness (github.com/deepseek-ai/deepseek-harness, read 2026-11-02)
+What it does (Source inspected: docs/subsystems/compaction.md, agent-team.md, subagent.md; dsh-superagent report):
+- Compaction under "pressure": before summarising history it first prunes old tool results to stubs (tool-result
+  pruner), and only then summarises a span into one node.
+- Agent teams share a task DAG: each task has status (pending / in_progress / completed), owner, blockedBy and
+  advisory write scopes, with overlap warnings; peers talk through a mailbox delivered at step boundaries.
+- Subagents can be asked for a structured result (outputSchema): the child returns validated JSON, not prose.
+- dsh-superagent: a router with a small tool set dispatches isolated workers; their single-session baseline "never
+  called a subagent" in 5 runs - same as our 2026-10 finding that a lead model with helpers never delegates: the
+  harness, not the model, must orchestrate.
+Idea for us (v3.5, "shared task ledger"): the spec card becomes a ledger of items (output, behaviour, edge case,
+target) with status and evidence. The builder and the takeover mark items done with the command that shows it; the
+judge reviews item by item; the handoff IS the ledger (structured, small); the takeover's budget is renewed while
+items move to done (a progress signal that also sees work outside the folder, answering the v3.3 red team); old tool
+outputs in the expensive model's context are pruned to stubs once their item is done.
+Red team to run before building: models may tick items without real evidence (judge must verify); ledger upkeep costs
+commands; pruning can hide output the model needs again.
