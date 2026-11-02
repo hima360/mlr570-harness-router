@@ -8,17 +8,33 @@
   "task_timeout_minutes": 180,
   "datasets": {
     "tb4": "terminal-bench/terminal-bench@4.0.0",
-    "swe": "scale-ai/swe-bench-pro"
+    "swe": "swebenchpro"
   },
   "harnesses": {
-    "claude-code": "harbor run -d {dataset} -t {task} -a claude-code -m {model} -o {outdir}",
-    "codex": "harbor run -d {dataset} -t {task} -a codex -m {model} -o {outdir}",
+    "claude-code": "harbor run -d {dataset} -i {task} -a claude-code -m {model} -n 1 -o {outdir} --job-name run",
+    "codex": "harbor run -d {dataset} -i {task} -a codex -m {model} -n 1 -o {outdir} --job-name run",
     "hermes": "FILL IN DURING SMOKE TEST",
     "zcode": "FILL IN DURING SMOKE TEST"
   },
   "prices_per_million": {
-    "claude-sonnet-5-5": {"input_tokens": 2.0, "output_tokens": 10.0, "cached_tokens": 0.10},
-    "gpt-6.1-sol": {"input_tokens": 2.0, "output_tokens": 10.0, "cached_tokens": 0.0},
-    "glm-5.3-flash": {"input_tokens": 0.15, "output_tokens": 0.50, "cached_tokens": 0.0}
+    "claude-sonnet-5-5": {
+      "input_tokens": 2.0,
+      "output_tokens": 10.0,
+      "cached_tokens": 0.1
+    },
+    "gpt-6.1-sol": {
+      "input_tokens": 2.0,
+      "output_tokens": 10.0,
+      "cached_tokens": 0.0
+    },
+    "glm-5.3-flash": {
+      "input_tokens": 0.15,
+      "output_tokens": 0.5,
+      "cached_tokens": 0.0
+    }
+  },
+  "task_prefix": {
+    "tb4": "terminal-bench/",
+    "swe": ""
   }
 }
