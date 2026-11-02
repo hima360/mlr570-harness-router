@@ -108,3 +108,8 @@ Candidate improvements (from dt1/dv8 traces)
   is 13% cheaper and 2 solves fewer (ctr r1 / production r2 lost; noise on 24). Takeover is 85-90% of every run's
   cost (run_notes), so the next lever is who does the takeover, not more context. Best version stays v2.8 for solves;
   v3.5 is the cheaper variant. Sonnet 5.5 is gone from Droid (catalog 03:20 lists claude-sonnet-5, not 5.5).
+- 03:23 v3.7 (takeover37) = v3.5 with claude-sonnet-5 doing the takeover (list $2/$10, half of Opus; Opus still plans
+  and judges). Red team: build with guards; finishing v3.5 on ho1/ho2 cannot win on cost (~$36 vs Opus $31.31 over 36).
+  Its v3.0 precedent (GLM-5.3 takeover 1/7 vs 4/7) is the risk. Dev dv15 started (parallel 6). Keep rule (chain
+  jobs/ho_v37.chain.sh): >=5/12, cost <= 75% of dv13 on the same tasks, at most 1 dv13 solve lost -> then held-out
+  ho5+ho4 takeover37, which must beat Opus 4/23 on solves and come in under ~$17.
