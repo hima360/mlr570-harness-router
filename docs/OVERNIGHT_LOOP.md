@@ -11,7 +11,8 @@ Goal: beat Opus alone on pass rate AND total cost, without benchmaxing.
    names and numbers before proposing anything.
 3. Idea with theory: tie the idea to a known mechanism (cascade, blackboard, verifier/test selection, episodic
    memory, budgeted search...) and to the pattern from step 2.
-4. Red team it: write the strongest case against (benchmaxing, noise on 12 tasks, extra cost on every task, wrong
+4. Red team it: hand the proposal, its evidence and the base version to the `harness-red-team` subagent
+   (.claude/agents/harness-red-team.md) and act on its verdict and guards; then also write the strongest case against (benchmaxing, noise on 12 tasks, extra cost on every task, wrong
    evidence trusted, breaks working code) and a concrete guard for each point (docs/HARNESS_IDEAS_REDTEAM.md format).
 5. Build behind a config switch that defaults off (queued runs of other versions load the same code), unit test,
    pytest must pass before commit, new setup name.
