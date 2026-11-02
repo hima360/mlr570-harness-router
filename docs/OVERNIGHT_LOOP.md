@@ -71,3 +71,10 @@ Candidate improvements (from dt1/dv8 traces)
   html-js); keep rule: takeover solves kept, output/call -40%, calls +<=20%, Opus cost -20%.
   Next on-thesis cost lever (WHAT THEY KNOW): per-role context - the takeover gets compacted observations and the
   handoff instead of full 10k-char outputs (fresh input is 40% of Opus spend).
+- 22:30 dev, same tasks vs v2.8: v2.9 5/10 $10.58 (v2.8 6/10 $9.88) DROP; v3.0 GLM-5.3 takeover 1/7 $3.16 (v2.8 4/7
+  $5.15) DROP, stopped; v3.4 low effort: html-js takeover quit after 2 calls, fail (v2.8 solved) DROP, stopped;
+  v3.1 2/6 $5.28 (v2.8 3/6 $4.62) still running. Finding: 73 of 934 takeover calls broke the prompt cache and cost
+  $6.52 (29% of takeover fresh input); 58 of them ($4.30) were our own session restarts (session_budget_chars 80k).
+  Theory: with caching, a long cached context costs 1/20 of re-sent input, so compaction raises cost.
+  => v3.5 = v2.8 + session_budget_chars 300k, dev dv13. Also: takeovers cost ~$1.15 vs an Opus-alone run $0.89,
+  because Opus alone often gives up in 1-3 min; v2.8's edge is solves, so cost must come from waste, not effort.

@@ -1885,3 +1885,10 @@ def test_v34_takeover_runs_at_the_configured_effort(tmp_path, monkeypatch):
                             takeover_effort="low")
     asyncio.run(agent.run("t", env, types.SimpleNamespace(metadata=None)))
     assert efforts[0][1] != "low" and efforts[1] == ("anthropic/claude-opus-5-5", "low")
+
+
+def test_v35_keeps_long_cached_sessions():
+    from phase2.config import load_config
+    from phase2.setups import SETUPS
+
+    assert load_config(SETUPS["takeover35"][2]).session_budget_chars == 300000

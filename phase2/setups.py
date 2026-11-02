@@ -46,4 +46,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "takeover33": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover33.json"),
     # v3.4: v2.8 with the Opus takeover at low reasoning effort (output tokens were half of Opus spend).
     "takeover34": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover34.json"),
+    # v3.5: v2.8 with session compaction at 300k chars (our session restarts broke the prompt cache).
+    "takeover35": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover35.json"),
 }
