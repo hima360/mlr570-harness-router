@@ -52,4 +52,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "takeover36": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover36.json"),
     # v3.7: v3.5 with Sonnet 5 doing the takeover; Opus plans and judges.
     "takeover37": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover37.json"),
+    # v3.8: v3.5 with the Opus takeover capped at 20 commands.
+    "takeover38": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover38.json"),
 }

@@ -1903,3 +1903,12 @@ def test_v37_sonnet_takes_over_at_list_price():
     assert cfg.takeover_model == "droid/claude-sonnet-5" and cfg.senior_reviewer_model == "droid/claude-opus-5-5"
     assert cfg.session_budget_chars == 300000
     assert abs(call_usd("droid/claude-sonnet-5", 1_000_000, 0, 0) - 2.50) < 1e-9
+
+
+def test_v38_caps_the_takeover_at_20_commands():
+    from phase2.config import load_config
+    from phase2.setups import SETUPS
+
+    cfg = load_config(SETUPS["takeover38"][2])
+    assert cfg.takeover_step_limit == 20 and cfg.takeover_model == "droid/claude-opus-5-5"
+    assert cfg.session_budget_chars == 300000

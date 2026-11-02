@@ -118,3 +118,11 @@ Candidate improvements (from dt1/dv8 traces)
   html-js-filter 15 calls $0.26 and failed (Opus 4 calls, solved). Half the price per token did not buy half the cost:
   the strong model finishes in fewer calls. Same lesson as v3.0 (GLM-5.3 takeover). dv15 and its chain stopped with
   5 runs unfinished to save Droid. Takeover stays Opus; cost must come from fewer/shorter takeovers, not a weaker one.
+- 04:10 v3.8 (takeover38: v3.5 + Opus takeover capped at 20 commands) built, DROPPED before any run (red team).
+  Offline sim (prices each traced takeover call; a solve counts only if it needed <= N calls): v2.8 held-out cap 20
+  6/36 $31.76, cap 15 5 $27.44; but on v3.5 ho4+ho5 cap 20 gives 2/24 $16.38 (below Opus 4/23) and cap 35 keeps 5
+  for only $0.45 less. The long takeovers ARE the solves (mp 33/35, sglang 28, vpp 47, sglang 59). N would also be
+  chosen on held-out traces (dev has one solve past 20 calls), and the takeover is not told its budget. Dollar caps
+  are worse. Lesson: cost must come from FEWER takeovers (the judge handing over less often), not shorter ones.
+- 04:12 v3.5 on ho1/ho2 started (prefix ho2, 6 tasks x2, same seed 570): the only held-out sets v3.5 has not been
+  looked at on, to give v3.5 a full 36-run record next to v2.8 and Opus (record, not a tuning step).
