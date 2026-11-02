@@ -103,3 +103,8 @@ Candidate improvements (from dt1/dv8 traces)
   unfinished takeovers were at 25, 25, 13, 11...). Restart-as-nudge is not supported: 5/11 solved v2.8 takeovers and
   10/19 failed ones restarted. v3.6 DROPPED and dv14 stopped. Lesson: never read an interim held-out score; compare
   only the same finished trials, and wait for the slow ones (solves are often the long runs).
+- 03:20 v3.5 held-out FINAL (ho4+ho5, 24 runs, same seeds): v3.5 5/24 $22.22; v2.8 7/24 $25.67; Opus alone 4/23
+  $21.10 (~$22.0 per 24 runs at its rate). v3.5 beats Opus on solves, ties it on cost: goal NOT met. Versus v2.8 it
+  is 13% cheaper and 2 solves fewer (ctr r1 / production r2 lost; noise on 24). Takeover is 85-90% of every run's
+  cost (run_notes), so the next lever is who does the takeover, not more context. Best version stays v2.8 for solves;
+  v3.5 is the cheaper variant. Sonnet 5.5 is gone from Droid (catalog 03:20 lists claude-sonnet-5, not 5.5).
