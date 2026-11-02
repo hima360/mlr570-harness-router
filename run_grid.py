@@ -136,8 +136,11 @@ def run_one(bench, task, run, harness):
         return
 
 
+EXCLUDED = {tuple(l.split("\t")[:2]) for l in Path("tasks/excluded.tsv").read_text().splitlines()
+            if l.strip() and not l.startswith("#")} if Path("tasks/excluded.tsv").exists() else set()
 plan = [l.split("\t") for l in Path(cfg["plan"]).read_text().splitlines()
         if l.strip() and not l.startswith("#")]
+plan = [p for p in plan if (p[0], p[1]) not in EXCLUDED]  # tasks/excluded.tsv: hardware we do not have
 skip = done_keys()
 todo = [(b, t, int(r), h) for b, t, r in plan for h in cfg["harnesses"]
         if (b, t, int(r), h) not in skip]
