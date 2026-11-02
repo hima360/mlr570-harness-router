@@ -1,0 +1,4 @@
+# Tasks left out of Phase 1 for everyone: their environments need a GPU or more than 14 CPUs (agreed 2026-11-02).
+# plan.tsv stays as generated; the runner skips these and status.py and the analysis leave them out.
+tb4	live-database-cutover
+tb4	jax-speedrun-gpu

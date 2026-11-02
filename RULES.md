@@ -5,6 +5,8 @@ before working around it.
 
 1. **Same plan for everyone.** `plan.tsv` is generated once with seed 570 and never edited.
    Changing the task count after the pilot means regenerating it for all three, agreed in the group.
+   Tasks in `tasks/excluded.tsv` (environments needing a GPU or more than 14 CPUs) are skipped by the runner and
+   left out of the analysis for everyone; `plan.tsv` itself is not edited. Phase 1 = 40 runs per harness.
 2. **Frozen settings.** Prices, log fields, timeouts and `parallel` change only through a PR
    that the other two approve, and never once Phase 1 runs have started.
 3. **Pinned versions.** Use the versions in `versions.md`. Turn off auto-updates for every

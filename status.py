@@ -7,9 +7,14 @@ from pathlib import Path
 def render(cfg_path):
     cfg = json.loads(Path(cfg_path).read_text())
     plan = [l.split("\t") for l in Path(cfg["plan"]).read_text().splitlines() if l.strip() and not l.startswith("#")]
+    exc = Path("tasks/excluded.tsv")
+    excluded = {tuple(l.split("\t")[:2]) for l in exc.read_text().splitlines()
+                if l.strip() and not l.startswith("#")} if exc.exists() else set()
+    plan = [p for p in plan if (p[0], p[1]) not in excluded]
     total = len(plan) * len(cfg["harnesses"])
     log = Path("results") / f"{cfg['person']}.jsonl"
     rows = [json.loads(l) for l in log.read_text().splitlines() if l.strip()] if log.exists() else []
+    rows = [r for r in rows if (r["benchmark"], r["task"]) not in excluded]
     out = [f"{cfg['person']} / {cfg['model']}: {len(rows)} of {total} runs logged"]
     for h in cfg["harnesses"]:
         hr = [r for r in rows if r["harness"] == h]
