@@ -136,7 +136,7 @@ class Orchestrator:
         if tests_found:
             self.trace.log("tests_found", text=tests_found.strip()[:1000])
         # Droid: show the starting state as command output so workers do not re-run the same listing.
-        self.env_block = (f"\n\nAlready run at the start (do not repeat): pwd && ls -la\n{env_summary[:2500]}"
+        self.env_block = (f"\n\nAlready run at the start (do not repeat): pwd && ls -la\n{env_summary[:5500 if self.cfg.repo_map else 2500]}"
                           if self.cfg.env_bootstrap else tests_found)
         if self.cfg.plan_from:  # same DAG as an earlier run: only the routing policy differs
             plan = load_pinned_plan(self.cfg.plan_from, self.cfg.max_plan_steps)
@@ -372,7 +372,15 @@ class Orchestrator:
     async def _env_summary(self, environment) -> str:
         try:
             r = await environment.exec("pwd && ls -la | head -50", timeout_sec=30)
-            return (r.stdout or "")[:4000]
+            out = (r.stdout or "")[:4000]
+            if self.cfg.repo_map:  # v3.1: two levels of files and what languages they are in
+                m = await environment.exec(
+                    "echo '--- files (2 levels)'; find . -maxdepth 2 -not -path '*/.git*' -not -path '*/node_modules*' "
+                    "| sort | head -80; echo '--- by extension'; find . -type f -not -path '*/.git/*' "
+                    "-not -path '*/node_modules/*' | sed -n 's/.*\\.//p' | sort | uniq -c | sort -rn | head -12",
+                    timeout_sec=30)
+                out += "\n" + (m.stdout or "")[:3000]
+            return out
         except Exception as e:
             return f"(listing failed: {e})"
 

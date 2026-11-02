@@ -84,6 +84,23 @@ Take over and finish the task. Keep what works, fix what does not, and check the
 tests would (a fresh process, the real entry points, the cases the task names). Their notes are below. Submit when
 the whole task is done."""
 
+SPEC_PROMPT = """Turn this task into a checklist a team will build and test against. Do not solve it.
+
+TASK:
+{task}
+
+Reply with plain lines, at most 25, in these groups:
+OUTPUTS: every file, path, command, port or format the task requires, exactly as written.
+BEHAVIOUR: each required behaviour, one per line.
+EDGE CASES: every case the task names or clearly implies (empty, failure, restart, limits, concurrency, users).
+TARGETS: every number to meet (speed, accuracy, size), with how it would be measured.
+HOW IT IS TESTED: how the hidden tests are likely to run it (fresh shell, non-root, entry points)."""
+
+HANDOFF_NOTE = """
+
+Before you submit, write /tmp/HANDOFF.md (outside the work folder) for whoever continues: WORKS (what you
+checked and how), FAILS OR UNCHECKED (what is missing or unverified), FILES (each file you changed, one line why)."""
+
 
 def parse_open(reply: str, problems: list[dict]) -> list[dict]:
     """The problems the reviewer still finds open after the fix ([] when it cannot tell: never block on a broken

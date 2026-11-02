@@ -1808,3 +1808,38 @@ def test_v30_glm53_takeover_is_priced_and_wired():
     cfg = load_config(SETUPS["takeover30"][2])
     assert cfg.takeover_model == "droid/glm-5.3" and cfg.senior_reviewer_model == "droid/claude-opus-5-5"
     assert abs(call_usd("droid/glm-5.3", 1_000_000, 0, 1_000_000) - 5.80) < 1e-9
+
+
+def test_v31_spec_card_and_handoff_reach_every_role(tmp_path, monkeypatch):
+    """v3.1: the spec checklist goes to the builder, the judge and the takeover; the takeover reads the builder's
+    /tmp/HANDOFF.md; the starting listing carries a file map."""
+    import types
+
+    import phase2.agent as A
+
+    calls, prompts = [], []
+
+    def fake_run_worker(cfg, ledger, model_id, adapter, *, step, blackboard_text="", senior=None, **kw):
+        calls.append((model_id, step.goal, blackboard_text))
+        return WorkerResult("Submitted", "done", 3)
+
+    def fake_chat(cfg, ledger, model, msgs, on_call=None, **kw):
+        prompts.append(msgs[0]["content"])
+        if "Turn this task into a checklist" in msgs[0]["content"]:
+            return "OUTPUTS: /app/out.csv"
+        return '{"verdict": "fix", "problems": [{"what": "header row missing"}]}'
+
+    monkeypatch.setattr(A, "run_worker", fake_run_worker)
+    monkeypatch.setattr(A, "chat", fake_chat)
+    env = FakeEnvironment(lambda c: ("ok\n", 0) if "cp -a" in c else ("--- a\n+++ b\n", 0) if "diff -rq" in c
+                          else ("WORKS: parser\n", 0) if "HANDOFF.md" in c
+                          else ("--- files (2 levels)\n./src\n", 0) if "maxdepth 2" in c else ("/app\n", 0))
+    agent = A.RoutedHarness(logs_dir=tmp_path, model_name=None, policy="fixed:1", max_plan_steps="1",
+                            senior_reviewer_model="anthropic/claude-opus-5-5", takeover_model="anthropic/claude-opus-5-5",
+                            spec_model="anthropic/claude-opus-5-5", repo_map="true", handoff="true")
+    asyncio.run(agent.run("write out.csv", env, types.SimpleNamespace(metadata=None)))
+    builder, takeover = calls
+    assert "SPEC CARD" in builder[1] and "/app/out.csv" in builder[1] and "HANDOFF.md" in builder[1]
+    assert "files (2 levels)" in builder[2]
+    assert any("/app/out.csv" in p and "senior engineer" in p for p in prompts)
+    assert "/app/out.csv" in takeover[1] and "WORKS: parser" in takeover[2]
