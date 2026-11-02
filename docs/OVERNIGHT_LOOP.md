@@ -29,3 +29,6 @@ Candidate improvements (from dt1/dv8 traces)
   => Next candidate (5): a cheaper takeover model. GPT-6.1 Sol through Droid lists at half Opus's price
   ($2/$10 vs $4/$20 per M); judge stays Opus. Test as takeover30 on dev.
   => Candidate (6): cap takeover at 35-40 commands (solves past 40 calls: risk-scorer 43, vpp 47, sglang 59).
+- 21:25 v3.0 (takeover30, GLM-5.3 takes over) launched on dev as dv10 (parallel 4, alongside dv9).
+- 21:45 v3.1 (takeover31: spec card, repo map, handoff on top of v2.8) launched on dev as dv11.
+- 21:50 red-teamed idea list: docs/HARNESS_IDEAS_REDTEAM.md. Build order: stall trigger + progress budget (v3.3), tester-as-evidence, trained router, lessons.
