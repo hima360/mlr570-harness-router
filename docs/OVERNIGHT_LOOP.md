@@ -19,3 +19,13 @@ Candidate improvements (from dt1/dv8 traces)
 3. Judge precision: the judge said fix on GLM-solved work (mvcc, risk-scorer -> $2.55 takeover). Ask the judge to rate
    severity; minor problems go back to GLM once (cheap) before Opus takes over.
 4. Let GLM fix first when it submitted and problems are few (GLM fix ~$0.05 vs takeover ~$1).
+
+## Log
+- 21:03 v2.9 (takeover29, builder-fix-first) on 12 dev tasks as dv9; v2.8 baseline completed on the 4 missing dev tasks (dv8).
+- 21:30 analysis of 43 v2.8/v2.9 runs (scripts/run_notes.py): every held-out solve came through an Opus takeover;
+  all 7 held-out runs the judge shipped failed (glycan x2, protein x2, roy x2 - Opus alone also fails these). Takeover
+  is 80-95% of run cost; v2.8 takeovers run longer than Opus-alone runs (ho5 Opus alone: 7 min, $0.88/run).
+  v2.9 builder-fix-first: fin-saccr cost 0.53 -> 0.82 when GLM's fix did not settle it (early sign it adds cost).
+  => Next candidate (5): a cheaper takeover model. GPT-6.1 Sol through Droid lists at half Opus's price
+  ($2/$10 vs $4/$20 per M); judge stays Opus. Test as takeover30 on dev.
+  => Candidate (6): cap takeover at 35-40 commands (solves past 40 calls: risk-scorer 43, vpp 47, sglang 59).

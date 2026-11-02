@@ -1798,3 +1798,13 @@ def test_v29_builder_fixes_a_short_problem_list_before_any_takeover(tmp_path, mo
     assert "empty input crashes" in calls[1][1]
     calls = run("fix")
     assert len(calls) == 3 and calls[2][0] == "anthropic/claude-opus-5-5"
+
+
+def test_v30_glm53_takeover_is_priced_and_wired():
+    from phase2.config import load_config
+    from phase2.list_prices import call_usd
+    from phase2.setups import SETUPS
+
+    cfg = load_config(SETUPS["takeover30"][2])
+    assert cfg.takeover_model == "droid/glm-5.3" and cfg.senior_reviewer_model == "droid/claude-opus-5-5"
+    assert call_usd("droid/glm-5.3", 1_000_000, 0, 1_000_000) == 1.40 + 4.40

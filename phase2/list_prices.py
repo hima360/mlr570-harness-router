@@ -13,6 +13,7 @@ LIST_PRICES = {
     "claude-haiku-5-5": (0.10, 0.125, 0.01, 0.50),  # prompts up to 100k tokens
     # https://docs.z.ai/guides/overview/pricing (cached-input storage free for now)
     "glm-5.3-flash": (0.15, 0.15, 0.03, 0.50),
+    "glm-5.3": (1.40, 1.40, 0.26, 4.40),  # same page, checked 2026-11-02
     # secondary sources (thepricer.org, anotherwrapper.com)
     "gpt-6-luna": (0.10, 0.125, 0.01, 0.50),
     "gpt-6.1-sol": (2.00, 2.50, 0.20, 10.00),

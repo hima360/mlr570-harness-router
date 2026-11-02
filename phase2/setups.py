@@ -38,4 +38,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "takeover28": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover28.json"),
     # v2.9: v2.8 plus builder-fix-first (a short problem list goes back to GLM once before Opus takes over).
     "takeover29": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover29.json"),
+    # v3.0: v2.8 with GLM-5.3 taking over (list price about a quarter of Opus's); Opus still judges.
+    "takeover30": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover30.json"),
 }
