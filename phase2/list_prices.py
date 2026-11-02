@@ -10,6 +10,7 @@ LIST_PRICES = {
     # https://platform.claude.com/docs/en/about-claude/pricing
     "claude-opus-5-5": (4.00, 5.00, 0.20, 20.00),
     "claude-sonnet-5-5": (2.00, 2.50, 0.10, 10.00),
+    "claude-sonnet-5": (2.00, 2.50, 0.20, 10.00),  # legacy; same page, checked 2026-11-03
     "claude-haiku-5-5": (0.10, 0.125, 0.01, 0.50),  # prompts up to 100k tokens
     # https://docs.z.ai/guides/overview/pricing (cached-input storage free for now)
     "glm-5.3-flash": (0.15, 0.15, 0.03, 0.50),
