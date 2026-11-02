@@ -117,6 +117,14 @@ class HarnessConfig:
     # the senior review runs with budget left to act on it (0 = off; needs clock and a senior reviewer).
     strategy_model: str = ""
     checkpoint_frac: float = 0.0
+    # v2.8 (takeover): the builder works first, without the in-loop review, within takeover_first_step_limit commands
+    # and takeover_first_wall_sec; then the senior reviewer judges the result once, and on "fix" this model takes over
+    # in the same container with the problems and the builder's notes (takeover_step_limit commands). 2026-11-02 dt1:
+    # the v2.7 in-loop review broke 4 tasks GLM alone solved; its verdict said "fix" on 23 of 29 failed runs.
+    takeover_model: str = ""
+    takeover_first_step_limit: int = 50
+    takeover_first_wall_sec: int = 1500
+    takeover_step_limit: int = 60
     senior_fix_model: str = ""
     senior_fix_step_limit: int = 25
     helper_policy: str = "laya"

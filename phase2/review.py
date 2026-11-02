@@ -75,6 +75,15 @@ Fix exactly these, without undoing parts that work, and check each fix the way t
 fresh process, possibly as a non-root user, through the real entry points). Their notes on what they did are
 below. Then submit."""
 
+TAKEOVER_GOAL = """{goal}
+
+Another engineer (a cheaper model) worked on this task first, in this same container; their changes are in place. A
+senior review of their result found:
+{problems}
+Take over and finish the task. Keep what works, fix what does not, and check the result the way the task's own
+tests would (a fresh process, the real entry points, the cases the task names). Their notes are below. Submit when
+the whole task is done."""
+
 
 def parse_open(reply: str, problems: list[dict]) -> list[dict]:
     """The problems the reviewer still finds open after the fix ([] when it cannot tell: never block on a broken

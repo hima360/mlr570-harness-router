@@ -1725,3 +1725,40 @@ def test_harness_wizard_and_check_guess(tmp_path, monkeypatch):
     h.wizard(ask=lambda q: next(answers))
     assert calls == [["run", "fix the bug", str(tmp_path), "--check", "npm test"]]
     assert h.wizard(ask=lambda q: "4") == 0 and calls[-1] == ["doctor"]
+
+
+def test_v28_builder_first_then_opus_takes_over_only_on_fix(tmp_path, monkeypatch):
+    """v2.8: the builder works without the in-loop review; one judgment after it; "fix" hands the task to the
+    takeover model with the problems, "ship" keeps the builder's result."""
+    import types
+
+    import phase2.agent as A
+
+    def run(verdict):
+        calls = []
+
+        def fake_run_worker(cfg, ledger, model_id, adapter, *, step, senior=None, **kw):
+            calls.append((model_id, step.goal, step.worker_step_limit, senior))
+            return WorkerResult("Submitted", f"done by {model_id}", 3)
+
+        monkeypatch.setattr(A, "run_worker", fake_run_worker)
+        monkeypatch.setattr(A, "chat", lambda cfg, ledger, model, msgs, on_call=None, **kw:
+                            '{"verdict": "%s", "problems": [{"what": "restart loses data"}]}' % verdict)
+        logs = tmp_path / verdict
+        env = FakeEnvironment(lambda c: ("ok\n", 0) if "cp -a" in c else ("--- a\n+++ b\n", 0) if "diff -rq" in c
+                              else ("/app\n", 0))
+        agent = A.RoutedHarness(logs_dir=logs, model_name=None, policy="fixed:1", max_plan_steps="1",
+                                senior_reviewer_model="anthropic/claude-opus-5-5",
+                                takeover_model="anthropic/claude-opus-5-5", takeover_first_step_limit="7",
+                                takeover_step_limit="9")
+        asyncio.run(agent.run("keep data across restarts", env, types.SimpleNamespace(metadata=None)))
+        events = [json.loads(l) for l in (logs / "trace.jsonl").read_text().splitlines()]
+        return calls, events
+
+    calls, events = run("ship")
+    assert len(calls) == 1 and calls[0][2] == 7 and calls[0][3] is None  # no in-loop review
+    assert not [e for e in events if e["event"] == "takeover"]
+    calls, events = run("fix")
+    assert [c[0] for c in calls][1] == "anthropic/claude-opus-5-5" and calls[1][2] == 9
+    assert "restart loses data" in calls[1][1] and "keep data across restarts" in calls[1][1]
+    assert [e["phase"] for e in events if e["event"] == "takeover"] == ["start", "end"]

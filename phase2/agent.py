@@ -37,7 +37,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "helper_policy", "helper_step_limit", "max_delegations", "max_parallel_helpers",
                "senior_reviewer_model", "senior_review_rounds", "senior_review_explore", "senior_verify",
                "senior_fix_model", "senior_fix_step_limit", "measure_targets", "clock",
-               "wrap_up_frac", "strategy_model", "checkpoint_frac")
+               "wrap_up_frac", "strategy_model", "checkpoint_frac", "takeover_model", "takeover_first_step_limit",
+               "takeover_first_wall_sec", "takeover_step_limit")
 
 
 class RoutedHarness(BaseAgent):
@@ -214,7 +215,64 @@ class RoutedHarness(BaseAgent):
             minutes = (step.wall_time_sec or self.cfg.step_wall_time_sec) // 60
             return step.model_copy(update={"goal": step.goal + strategy_text(strategies[step.id], limit, minutes)})
 
+        def takeover(step, model_id, blackboard_text, output_path):
+            """v2.8: the builder works alone first (no in-loop review: it broke work GLM had right), the senior
+            reviewer judges the result once, and on "fix" the takeover model continues in the same container."""
+            from .cli_models import CliSession, complete_fn_for
+            from .review import TAKEOVER_GOAL, senior_review
+            from .worker import WorkerResult
+
+            first_step = step.model_copy(update={"worker_step_limit": self.cfg.takeover_first_step_limit,
+                                                 "wall_time_sec": self.cfg.takeover_first_wall_sec})
+            with report_failures(lambda info: trace.log("llm_call_failed", role="worker", step=step.id, **info)):
+                first = run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=first_step,
+                                   blackboard_text=blackboard_text, output_path=output_path,
+                                   on_call=lambda info: trace.log("llm_call", role="worker", step=step.id, **info))
+            try:
+                messages = json.loads(Path(output_path).read_text()).get("messages", []) if output_path else []
+            except (OSError, ValueError):
+                messages = []
+            judge = self.cfg.senior_reviewer_model
+            session = CliSession() if complete_fn_for(judge) else None
+
+            def ask(msgs):
+                with report_failures(lambda info: trace.log("llm_call_failed", role="reviewer", step=step.id, **info)):
+                    return chat(self.cfg, ledger, judge, msgs, session=session,
+                                on_call=lambda info: trace.log("llm_call", role="reviewer", step=step.id, **info))
+
+            def explore(cmd):
+                return asyncio.run_coroutine_threadsafe(orch._explore(environment, cmd), loop).result()
+
+            try:
+                verdict, probs, n = senior_review(ask, instruction, first.summary, attempt_digest(messages, 5000),
+                                                  current_diff(20000), explore, self.cfg.senior_review_explore,
+                                                  evidence=True)
+            except Exception as e:  # no verdict: the stronger model takes over rather than ship unchecked work
+                verdict, probs, n = "fix", [], 0
+                trace.log("senior_review", step=step.id, model=judge, error=f"{type(e).__name__}: {e}"[:300])
+            trace.log("senior_review", step=step.id, model=judge, verdict=verdict, problems=probs, explored=n,
+                      round=1, builder_exit=first.exit_status)
+            if verdict == "ship" and first.exit_status == "Submitted":
+                return first
+            listed = "\n".join(f"{i}. {p['what']}" + (f"\n   fix: {p['fix']}" if p.get("fix") else "")
+                                for i, p in enumerate(probs, 1)) or "(the review gave no details; check everything)"
+            nxt = step.model_copy(update={"goal": TAKEOVER_GOAL.format(goal=step.goal, problems=listed),
+                                          "worker_step_limit": self.cfg.takeover_step_limit})
+            path = Path(output_path).with_name(Path(output_path).stem + "_takeover.json") if output_path else None
+            trace.log("takeover", step=step.id, model=self.cfg.takeover_model, problems=probs, phase="start")
+            with report_failures(lambda info: trace.log("llm_call_failed", role="takeover", step=step.id, **info)):
+                second = run_worker(self.cfg, ledger, self.cfg.takeover_model, adapter, task_overall=instruction,
+                                    step=nxt, blackboard_text="Notes of the engineer before you:\n"
+                                    + (attempt_digest(messages, 4000) or "(none)"), output_path=path,
+                                    on_call=lambda info: trace.log("llm_call", role="takeover", step=step.id, **info))
+            trace.log("takeover", step=step.id, model=self.cfg.takeover_model, phase="end",
+                      exit_status=second.exit_status, n_calls=second.n_calls, summary=second.summary[:300])
+            return WorkerResult(second.exit_status, (first.summary + " | takeover: " + second.summary).strip(" |"),
+                                first.n_calls + second.n_calls, second.session)
+
         def work(step, model_id, blackboard_text, output_path):
+            if self.cfg.takeover_model and model_id != self.cfg.takeover_model:
+                return takeover(step, model_id, blackboard_text, output_path)
             if self.cfg.strategy_model:
                 step = plan_work(step)
             helpers = None
