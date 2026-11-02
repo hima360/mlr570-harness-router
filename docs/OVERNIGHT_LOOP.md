@@ -113,3 +113,8 @@ Candidate improvements (from dt1/dv8 traces)
   Its v3.0 precedent (GLM-5.3 takeover 1/7 vs 4/7) is the risk. Dev dv15 started (parallel 6). Keep rule (chain
   jobs/ho_v37.chain.sh): >=5/12, cost <= 75% of dv13 on the same tasks, at most 1 dv13 solve lost -> then held-out
   ho5+ho4 takeover37, which must beat Opus 4/23 on solves and come in under ~$17.
+- 03:55 v3.7 DROPPED (red-team rule: 2 solves behind on the same finished trials). Same 7 dev tasks: v3.7 2/7 $3.36 vs
+  v3.5 4/7 $2.70. Sonnet 5 takeovers ran longer and cost more than Opus's: heat-pump 51 calls $1.29 (Opus 5, $0.19),
+  html-js-filter 15 calls $0.26 and failed (Opus 4 calls, solved). Half the price per token did not buy half the cost:
+  the strong model finishes in fewer calls. Same lesson as v3.0 (GLM-5.3 takeover). dv15 and its chain stopped with
+  5 runs unfinished to save Droid. Takeover stays Opus; cost must come from fewer/shorter takeovers, not a weaker one.
