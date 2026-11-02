@@ -1807,4 +1807,4 @@ def test_v30_glm53_takeover_is_priced_and_wired():
 
     cfg = load_config(SETUPS["takeover30"][2])
     assert cfg.takeover_model == "droid/glm-5.3" and cfg.senior_reviewer_model == "droid/claude-opus-5-5"
-    assert call_usd("droid/glm-5.3", 1_000_000, 0, 1_000_000) == 1.40 + 4.40
+    assert abs(call_usd("droid/glm-5.3", 1_000_000, 0, 1_000_000) - 5.80) < 1e-9
