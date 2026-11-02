@@ -2,6 +2,24 @@
 
 Goal: beat Opus alone on pass rate AND total cost, without benchmaxing.
 
+## Method (follow every firing, in this order)
+1. Anchor: the project question is whether a small local router plus harness-managed context lets cheap and
+   strong models together beat one strong model (Opus alone) on pass rate AND cost. Every version must change one of:
+   WHO WORKS (router/model choice), WHAT THEY KNOW (context, memory, handoff), WHEN TO ESCALATE (triggers, judge).
+   A change touching none of these is dropped.
+2. Evidence first: read the newest runs (scripts/run_notes.py --new) and name the failure or cost pattern with run
+   names and numbers before proposing anything.
+3. Idea with theory: tie the idea to a known mechanism (cascade, blackboard, verifier/test selection, episodic
+   memory, budgeted search...) and to the pattern from step 2.
+4. Red team it: write the strongest case against (benchmaxing, noise on 12 tasks, extra cost on every task, wrong
+   evidence trusted, breaks working code) and a concrete guard for each point (docs/HARNESS_IDEAS_REDTEAM.md format).
+5. Build behind a config switch that defaults off (queued runs of other versions load the same code), unit test,
+   pytest must pass before commit, new setup name.
+6. Test on the 12 dev tasks; keep only if solves >= and cost lower, or solves higher, than the best version so far.
+7. Confirm a kept version once on held-out (same seeds: ho5 572, ho4 571, ho1/ho2 570); beat Opus's existing rows
+   on solves AND total cost = goal reached, stop the loop.
+8. Log the decision and the numbers here; never claim a number not computed.
+
 Rules
 - Dev tasks only for tuning (never in plan.tsv, never in a held-out set): cargo-flight-dispatch embedding-drift-monitor
   fin-saccr-rwa heat-pump-warranty html-js-filter kv-live-surgery mvcc-lsm-compaction payments-pipeline-fix
