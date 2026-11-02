@@ -293,7 +293,8 @@ def remind(messages: list[dict], reminder: str, update: str = "") -> list[dict]:
 
 def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0, context_budget_chars: int = 0,
                     reminder: str = "", step_limit: int = 0, session_budget_chars: int = 0,
-                    fork_from: dict | None = None, team_feed=None, budget_fn=None, output_guard: bool = True):
+                    fork_from: dict | None = None, team_feed=None, budget_fn=None, output_guard: bool = True,
+                    session_nudge_chars: int = 0):
     """mini-swe-agent text-based model whose completions come from a CLI backend.
     `on_result(usage, text, ms)` is called after every completion."""
     import litellm
@@ -321,6 +322,12 @@ def make_text_model(model: str, on_result, complete_fn=None, idle_sec: float = 0
         elif session.id and session.chars + size(delta) <= session_budget_chars:
             if session.guarded:
                 delta = [{"role": "user", "content": "(Only the first command of your last reply was run.)"}, *delta]
+            if session_nudge_chars and session.chars >= getattr(session, "next_nudge", session_nudge_chars):
+                # v3.6: restate the task by appending (the cached prefix survives); v2.8's restart did this by accident
+                session.next_nudge = session.chars + session_nudge_chars
+                first = next((str(m.get("content") or "") for m in messages if m.get("role") == "user"), "")
+                delta = [{"role": "user", "content": "[The harness restates your task; keep going until all of it is "
+                          "done and checked]\n" + first[:6000]}, *delta]
             payload, kind = delta, "resume"
         else:
             if session.id:

@@ -378,7 +378,8 @@ def _make_model(cfg, ledger, model_id: str, on_call=None, effort: str | None = N
                                context_budget_chars=cfg.context_budget_chars, reminder=reminder,
                                step_limit=step_limit, session_budget_chars=cfg.session_budget_chars,
                                fork_from=fork_from, team_feed=team_feed, output_guard=cfg.output_guard,
-                               budget_fn=(lambda: budget_exceeded(cfg, ledger)) if ledger is not None else None)
+                               budget_fn=(lambda: budget_exceeded(cfg, ledger)) if ledger is not None else None,
+                               session_nudge_chars=cfg.session_nudge_chars)
     guard = IdleGuard(cfg.step_idle_sec)
 
     class LedgerModel(LitellmModel):

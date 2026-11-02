@@ -40,7 +40,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "wrap_up_frac", "strategy_model", "checkpoint_frac", "takeover_model", "takeover_first_step_limit",
                "takeover_first_wall_sec", "takeover_step_limit", "takeover_fix_first_max_problems",
                "takeover_fix_step_limit", "spec_model", "repo_map", "handoff", "progress_block",
-               "progress_patience", "takeover_effort")
+               "progress_patience", "takeover_effort",
+               "session_nudge_chars")
 
 
 class RoutedHarness(BaseAgent):

@@ -756,3 +756,27 @@ def test_reviewer_sends_back_values_without_evidence(monkeypatch):
     problem = asyncio.run(main())
     assert "no evidence" in problem and "seed (never printed" in problem
     assert "seed=0c6c49e8" in prompts[0] and "head log" in prompts[0]
+
+
+def test_v36_session_restates_the_task_by_appending_without_restarting():
+    from phase2 import cli_models
+
+    sent = []
+
+    def fake(model, msgs, session=None):
+        sent.append(("resume" if session.id else "new", [m["content"] for m in msgs]))
+        session.id = session.id or "S1"
+        return "```mswea_bash_command\nls\n```", {"prompt_tokens": 1, "completion_tokens": 1}
+
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, complete_fn=fake,
+                                       context_budget_chars=100000, session_budget_chars=300000,
+                                       session_nudge_chars=1000)
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "THE TASK"}]
+    model._query(msgs)
+    for i in range(3):
+        msgs += [{"role": "assistant", "content": f"a{i}"}, {"role": "user", "content": "o" * 700}]
+        model._query(msgs)
+    kinds = [k for k, _ in sent]
+    assert kinds == ["new", "resume", "resume", "resume"]  # never restarted: the cache survives
+    nudges = [i for i, (_, c) in enumerate(sent) if any("restates your task" in x for x in c)]
+    assert nudges and all("THE TASK" in " ".join(sent[i][1]) for i in nudges) and len(nudges) < 3

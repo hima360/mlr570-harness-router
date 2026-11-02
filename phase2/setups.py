@@ -48,4 +48,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "takeover34": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover34.json"),
     # v3.5: v2.8 with session compaction at 300k chars (our session restarts broke the prompt cache).
     "takeover35": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover35.json"),
+    # v3.6: v3.5 plus a cache-safe restatement of the task every 80k session chars.
+    "takeover36": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover36.json"),
 }

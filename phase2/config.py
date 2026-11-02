@@ -169,6 +169,10 @@ class HarnessConfig:
     # CLI workers keep one session per attempt and send only new turns, so the provider caches the prefix.
     # The session restarts from the compacted view (context_budget_chars) once it passes this size. 0 = off.
     session_budget_chars: int = 80000
+    # v3.6: each time a session grows by this many chars, the task is restated by appending it (0 = off). v3.5 kept
+    # the cache but its takeovers halved (median 9 vs 18.5 calls) and solved 0/14 held-out: v2.8's restart had
+    # been restating the task.
+    session_nudge_chars: int = 0
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180
