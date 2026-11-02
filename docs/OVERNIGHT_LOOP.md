@@ -91,3 +91,9 @@ Candidate improvements (from dt1/dv8 traces)
   evidence-backed) -> held-out confirmation of the best version. Stopped dv11 (v3.1: 2/6 vs v2.8 3/6, costlier).
 - 00:25 v3.5 dev so far 4/9 $3.31 vs v2.8 4/9 $6.57 on the same tasks (3 running: payments, risk-scorer, vf2). jobs/ho_v35.chain.sh confirms on held-out ho5+ho4 automatically if v3.5 ends with solves >= v2.8 at lower cost.
 - 01:49 v3.5 dev final: dv13 6/12 $8.78 vs v2.8 6 $12.00 GO. KEPT. Held-out ho5+ho4 (24 runs, takeover35) started 01:48.
+- 02:20 Phase 1 Claude Code column DONE: 40/40, 14 passed, $32.49 list price.
+- 02:20 v3.5 held-out interim: 0/14 solved ($6.6) vs v2.8 on the same sets (ho5 6/12, ho4 1/11). Takeovers are half
+  as long: median 9 calls vs 18.5 in v2.8 (8 vs 18 takeovers). Hypothesis: v2.8's session restart at 80k chars re-sent
+  a compacted view that restated the task, which acted as a "keep going" nudge; without it Opus submits early.
+  Cheaper, but it looks like it loses solves. Candidate v3.6: keep the cache (300k) AND restate the goal + open
+  problems periodically by APPENDING a reminder (cache-safe) instead of restarting the session.
