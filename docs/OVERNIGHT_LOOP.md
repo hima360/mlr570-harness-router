@@ -78,3 +78,11 @@ Candidate improvements (from dt1/dv8 traces)
   Theory: with caching, a long cached context costs 1/20 of re-sent input, so compaction raises cost.
   => v3.5 = v2.8 + session_budget_chars 300k, dev dv13. Also: takeovers cost ~$1.15 vs an Opus-alone run $0.89,
   because Opus alone often gives up in 1-3 min; v2.8's edge is solves, so cost must come from waste, not effort.
+
+## State for a fresh context (22:50)
+- Best version: v2.8 (takeover28). Held-out 11/35 $40.23 vs Opus alone 4/35 $31.31 (reports/heldout-v28.html).
+- Running: dv11 (v3.1 context), dv13 (v3.5 cache-keeping). Dropped: v2.9, v3.0, v3.3 (not run), v3.4.
+- Next: when dv13 ends compare with dv8 on the same tasks; if v3.5 keeps solves and is cheaper, confirm on held-out
+  ho5+ho4 (setup takeover35, same seeds). Then v3.6 = ledger (ideas doc section 12), red-team first.
+- Crons in this session: health check :07/:37, improvement loop :22/:52; Phase 1 resumes 23:50 (Pro window).
+- Red-team agent: .claude/agents/harness-red-team.md (subagent_type harness-red-team).
