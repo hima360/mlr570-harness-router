@@ -125,6 +125,11 @@ class HarnessConfig:
     takeover_first_step_limit: int = 50
     takeover_first_wall_sec: int = 1500
     takeover_step_limit: int = 60
+    # v2.9: when the judge lists at most this many problems on a submitted build, the builder fixes them first (one
+    # attempt of takeover_fix_step_limit commands) and the judge looks again; only a second "fix" hands over (0 = off).
+    # dv8: three of five takeovers followed a one- or two-problem verdict on work a GLM fix might settle for cents.
+    takeover_fix_first_max_problems: int = 0
+    takeover_fix_step_limit: int = 20
     senior_fix_model: str = ""
     senior_fix_step_limit: int = 25
     helper_policy: str = "laya"

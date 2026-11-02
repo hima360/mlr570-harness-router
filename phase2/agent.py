@@ -38,7 +38,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "senior_reviewer_model", "senior_review_rounds", "senior_review_explore", "senior_verify",
                "senior_fix_model", "senior_fix_step_limit", "measure_targets", "clock",
                "wrap_up_frac", "strategy_model", "checkpoint_frac", "takeover_model", "takeover_first_step_limit",
-               "takeover_first_wall_sec", "takeover_step_limit")
+               "takeover_first_wall_sec", "takeover_step_limit", "takeover_fix_first_max_problems",
+               "takeover_fix_step_limit")
 
 
 class RoutedHarness(BaseAgent):
@@ -243,17 +244,50 @@ class RoutedHarness(BaseAgent):
             def explore(cmd):
                 return asyncio.run_coroutine_threadsafe(orch._explore(environment, cmd), loop).result()
 
-            try:
-                verdict, probs, n = senior_review(ask, instruction, first.summary, attempt_digest(messages, 5000),
-                                                  current_diff(20000), explore, self.cfg.senior_review_explore,
-                                                  evidence=True)
-            except Exception as e:  # no verdict: the stronger model takes over rather than ship unchecked work
-                verdict, probs, n = "fix", [], 0
-                trace.log("senior_review", step=step.id, model=judge, error=f"{type(e).__name__}: {e}"[:300])
-            trace.log("senior_review", step=step.id, model=judge, verdict=verdict, problems=probs, explored=n,
-                      round=1, builder_exit=first.exit_status)
+            def judge_now(result, msgs, rnd):
+                try:
+                    verdict, probs, n = senior_review(ask, instruction, result.summary, attempt_digest(msgs, 5000),
+                                                      current_diff(20000), explore, self.cfg.senior_review_explore,
+                                                      evidence=True)
+                except Exception as e:  # no verdict: the stronger model takes over rather than ship unchecked work
+                    verdict, probs, n = "fix", [], 0
+                    trace.log("senior_review", step=step.id, model=judge, error=f"{type(e).__name__}: {e}"[:300])
+                trace.log("senior_review", step=step.id, model=judge, verdict=verdict, problems=probs, explored=n,
+                          round=rnd, builder_exit=result.exit_status)
+                return verdict, probs
+
+            verdict, probs = judge_now(first, messages, 1)
             if verdict == "ship" and first.exit_status == "Submitted":
                 return first
+            if (first.exit_status == "Submitted" and probs
+                    and len(probs) <= self.cfg.takeover_fix_first_max_problems):
+                from .review import FIX_GOAL
+
+                listed = "\n".join(f"{i}. {p['what']}" + (f"\n   fix: {p['fix']}" if p.get("fix") else "")
+                                    for i, p in enumerate(probs, 1))
+                fix = step.model_copy(update={"goal": FIX_GOAL.format(problems=listed),
+                                              "worker_step_limit": self.cfg.takeover_fix_step_limit})
+                fpath = Path(output_path).with_name(Path(output_path).stem + "_fix.json") if output_path else None
+                trace.log("builder_fix", step=step.id, model=model_id, problems=probs, phase="start")
+                with report_failures(lambda info: trace.log("llm_call_failed", role="worker", step=step.id, **info)):
+                    fixed = run_worker(self.cfg, ledger, model_id, adapter, task_overall=instruction, step=fix,
+                                       blackboard_text="Your notes so far:\n" + (attempt_digest(messages, 4000)
+                                                                                  or "(none)"),
+                                       output_path=fpath,
+                                       on_call=lambda info: trace.log("llm_call", role="worker", step=step.id,
+                                                                      **info))
+                try:
+                    fmsgs = json.loads(Path(fpath).read_text()).get("messages", []) if fpath else []
+                except (OSError, ValueError):
+                    fmsgs = []
+                trace.log("builder_fix", step=step.id, model=model_id, phase="end", exit_status=fixed.exit_status,
+                          n_calls=fixed.n_calls)
+                first = WorkerResult(fixed.exit_status, (first.summary + " | fix: " + fixed.summary).strip(" |"),
+                                     first.n_calls + fixed.n_calls, fixed.session)
+                messages = messages + fmsgs
+                verdict, probs = judge_now(first, fmsgs or messages, 2)
+                if verdict == "ship" and first.exit_status == "Submitted":
+                    return first
             listed = "\n".join(f"{i}. {p['what']}" + (f"\n   fix: {p['fix']}" if p.get("fix") else "")
                                 for i, p in enumerate(probs, 1)) or "(the review gave no details; check everything)"
             nxt = step.model_copy(update={"goal": TAKEOVER_GOAL.format(goal=step.goal, problems=listed),

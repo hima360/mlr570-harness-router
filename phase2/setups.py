@@ -36,4 +36,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "glmreview27": ("fixed:1", BASE, "configs/phase2-droid-glm-review27.json"),
     # v2.8: GLM builds alone first, Opus judges the result once, and on "fix" Opus takes over (no in-loop review).
     "takeover28": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover28.json"),
+    # v2.9: v2.8 plus builder-fix-first (a short problem list goes back to GLM once before Opus takes over).
+    "takeover29": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover29.json"),
 }

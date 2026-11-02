@@ -1762,3 +1762,39 @@ def test_v28_builder_first_then_opus_takes_over_only_on_fix(tmp_path, monkeypatc
     assert [c[0] for c in calls][1] == "anthropic/claude-opus-5-5" and calls[1][2] == 9
     assert "restart loses data" in calls[1][1] and "keep data across restarts" in calls[1][1]
     assert [e["phase"] for e in events if e["event"] == "takeover"] == ["start", "end"]
+
+
+def test_v29_builder_fixes_a_short_problem_list_before_any_takeover(tmp_path, monkeypatch):
+    """v2.9: a "fix" with few problems goes back to the builder once; the judge looks again; only a second "fix"
+    hands the task to the takeover model."""
+    import types
+
+    import phase2.agent as A
+
+    def run(second_verdict):
+        calls, verdicts = [], ["fix", second_verdict]
+
+        def fake_run_worker(cfg, ledger, model_id, adapter, *, step, senior=None, **kw):
+            calls.append((model_id, step.goal, step.worker_step_limit))
+            return WorkerResult("Submitted", f"done by {model_id}", 3)
+
+        def fake_chat(cfg, ledger, model, msgs, on_call=None, **kw):
+            return '{"verdict": "%s", "problems": [{"what": "empty input crashes"}]}' % verdicts.pop(0)
+
+        monkeypatch.setattr(A, "run_worker", fake_run_worker)
+        monkeypatch.setattr(A, "chat", fake_chat)
+        logs = tmp_path / second_verdict
+        env = FakeEnvironment(lambda c: ("ok\n", 0) if "cp -a" in c else ("--- a\n+++ b\n", 0) if "diff -rq" in c
+                              else ("/app\n", 0))
+        agent = A.RoutedHarness(logs_dir=logs, model_name=None, policy="fixed:1", max_plan_steps="1",
+                                senior_reviewer_model="anthropic/claude-opus-5-5",
+                                takeover_model="anthropic/claude-opus-5-5", takeover_fix_first_max_problems="2",
+                                takeover_fix_step_limit="5")
+        asyncio.run(agent.run("handle empty input", env, types.SimpleNamespace(metadata=None)))
+        return calls
+
+    calls = run("ship")
+    assert len(calls) == 2 and calls[1][0] != "anthropic/claude-opus-5-5" and calls[1][2] == 5
+    assert "empty input crashes" in calls[1][1]
+    calls = run("fix")
+    assert len(calls) == 3 and calls[2][0] == "anthropic/claude-opus-5-5"
