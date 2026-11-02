@@ -86,3 +86,6 @@ Candidate improvements (from dt1/dv8 traces)
   ho5+ho4 (setup takeover35, same seeds). Then v3.6 = ledger (ideas doc section 12), red-team first.
 - Crons in this session: health check :07/:37, improvement loop :22/:52; Phase 1 resumes 23:50 (Pro window).
 - Red-team agent: .claude/agents/harness-red-team.md (subagent_type harness-red-team).
+- 22:50 Droid hit its 5-hour usage limit ("You've reached your 5-hour Droid Core usage limit", resets ~23:47; read from
+  ~/.factory/logs). Droid usage is now the scarce resource before expiry. Priority: v3.5 dev (dv13, cheap,
+  evidence-backed) -> held-out confirmation of the best version. Stopped dv11 (v3.1: 2/6 vs v2.8 3/6, costlier).
