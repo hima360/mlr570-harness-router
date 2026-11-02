@@ -97,3 +97,9 @@ Candidate improvements (from dt1/dv8 traces)
   a compacted view that restated the task, which acted as a "keep going" nudge; without it Opus submits early.
   Cheaper, but it looks like it loses solves. Candidate v3.6: keep the cache (300k) AND restate the goal + open
   problems periodically by APPENDING a reminder (cache-safe) instead of restarting the session.
+- 02:35 CORRECTION (red team): the "v3.5 0/14 held-out" interim compared finished runs only; 5 of v3.5's 10 unfinished
+  trials are exactly the tasks v2.8 solved on ho5 (mp r1/r2, production r2, sglang r2, sound-change r1). On the same
+  14 finished trials v2.8 solved 1 (nextjs r2) vs v3.5 0: noise. The median-9-calls figure has the same bias (the
+  unfinished takeovers were at 25, 25, 13, 11...). Restart-as-nudge is not supported: 5/11 solved v2.8 takeovers and
+  10/19 failed ones restarted. v3.6 DROPPED and dv14 stopped. Lesson: never read an interim held-out score; compare
+  only the same finished trials, and wait for the slow ones (solves are often the long runs).
