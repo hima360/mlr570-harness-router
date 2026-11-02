@@ -16,8 +16,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Only real refusals. Claude Code logs "rate_limit_info": {"status": "allowed"} on every turn, and token counts can
+# be 429, so a bare "rate limit" or "429" matched healthy runs and threw them away (2026-11-02).
 CAP_PATTERN = re.compile(
-    r"usage limit|rate.?limit|limit reached|quota|too many requests|\b429\b|try again (at|in)",
+    r"usage limit reached|hit your (usage )?limit|limit reached\W*\|?\s*\d|\"status\"\s*:\s*\"rejected\"|"
+    r"quota exceeded|too many requests|try again (at|in) ",
     re.IGNORECASE)
 
 # Logins for the harnesses (for example CLAUDE_CODE_OAUTH_TOKEN) live in a local, git-ignored .env.
@@ -72,8 +75,10 @@ def capped_inside(outdir):
         return False
     for f in list((trial / "agent").glob("*.txt")) + list((trial / "agent").glob("*.log")):
         try:
-            if CAP_PATTERN.search(f.read_text(errors="replace")[-2000:]):
-                return True
+            tail = f.read_text(errors="replace")[-2000:]
+            m = CAP_PATTERN.search(tail)
+            if m:
+                return f"{f.name}: {tail[max(0, m.start() - 120):m.end() + 120]!r}"
         except OSError:
             pass
     return False
@@ -102,12 +107,19 @@ def run_one(bench, task, run, harness):
             p = subprocess.CompletedProcess(cmd, None, "", "timeout")
         # Only the tail is checked, so a task whose own text mentions "quota" is not a cap.
         capped = CAP_PATTERN.search((p.stdout + p.stderr)[-2000:]) or capped_inside(outdir)
+        if capped:
+            m = capped if hasattr(capped, "group") else None
+            text = (p.stdout + p.stderr)[-2000:] if m else ""
+            hit = text[max(0, m.start() - 120):m.end() + 120] if m else capped
+            print(f"[cap-evidence] {harness} {task}: {hit!r}", flush=True)
         if capped and attempt < cfg.get("max_cap_retries", 24):
             resume_at[0] = time.time() + cfg.get("cap_wait_minutes", 30) * 60
             print(f"[cap] {harness} {task}: waiting until "
                   f"{datetime.fromtimestamp(resume_at[0]):%H:%M}", flush=True)
             import shutil
-            shutil.rmtree(outdir, ignore_errors=True)  # the cut-off attempt is not data: rerun from scratch
+            keep = Path("runs/capped") / f"{Path(outdir).name}-{datetime.now():%H%M%S}"  # evidence, not data
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(outdir), keep) if Path(outdir).exists() else None
             continue
         res = parse_result(outdir)
         row = {"ts": datetime.now(timezone.utc).isoformat(), "person": person,
