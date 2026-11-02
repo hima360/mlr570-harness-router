@@ -51,3 +51,11 @@ Candidate improvements (from dt1/dv8 traces)
 - 21:25 v3.0 (takeover30, GLM-5.3 takes over) launched on dev as dv10 (parallel 4, alongside dv9).
 - 21:45 v3.1 (takeover31: spec card, repo map, handoff on top of v2.8) launched on dev as dv11.
 - 21:50 red-teamed idea list: docs/HARNESS_IDEAS_REDTEAM.md. Build order: stall trigger + progress budget (v3.3), tester-as-evidence, trained router, lessons.
+- 22:00 red team on the v3.2 router: BUILD WITH GUARDS, 2 routes only. "none" labels are mostly one failed Opus run,
+  not hopeless: v2.8 solved html-js-filter and react-lead-form (dev) and sglang, vpp (held-out) that are labelled none;
+  10 of 19 training labels are none, 3 are opus. Single runs flip (atrx, hof, roy). Dev tasks are in the training set.
+  Decisions: (a) none -> capped takeover, never no takeover; A only for confident "glm"; (b) drop GLM-5.3 route until dv10
+  shows >= 3 settled takeovers; (c) score the router out-of-fold only; (d) simulate offline on dt1+dv8 before any paid
+  run, build only if >= 6 dev solves at lower cost than dv8; (e) log a route event with head probabilities.
+  => Next paid build is the capped / progress-budget takeover (idea 7): it recovers most of the "hopeless" spend
+  ($3.69 on dev: cargo, heat-pump, kv, session) without losing html-js or react.
