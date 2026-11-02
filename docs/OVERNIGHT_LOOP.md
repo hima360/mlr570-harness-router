@@ -59,3 +59,4 @@ Candidate improvements (from dt1/dv8 traces)
   run, build only if >= 6 dev solves at lower cost than dv8; (e) log a route event with head probabilities.
   => Next paid build is the capped / progress-budget takeover (idea 7): it recovers most of the "hopeless" spend
   ($3.69 on dev: cargo, heat-pump, kv, session) without losing html-js or react.
+- 22:00 held-out so far (ho1/ho2 570, ho4 571, ho5 572; reports/heldout-v28.html): v2.8 11/35 $40.23 ($3.66/solve) vs Opus alone 4/35 $31.31 ($7.83/solve), GLM alone 2/34 $3.21. Solves 2.75x Opus; total cost +28%: cost is the gap.
