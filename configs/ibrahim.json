@@ -11,7 +11,7 @@
     "swe": "swebenchpro"
   },
   "harnesses": {
-    "claude-code": "harbor run -d {dataset} -i {task} -a claude-code -m {model} -n 1 -o {outdir} --job-name run"
+    "codex": "OPENAI_BASE_URL=http://host.docker.internal:10101/v1 OPENAI_API_KEY=\"$OCX_BRIDGE_TOKEN\" harbor run -d {dataset} -i {task} -a codex -m anthropic/{model} --ak reasoning_effort=medium --ak version=0.162.1 --ak 'config={{\"skills\":{{\"include_instructions\":false,\"bundled\":{{\"enabled\":false}}}},\"features\":{{\"memories\":false}}}}' -n 1 -o {outdir} --job-name run"
   },
   "prices_per_million": {
     "claude-sonnet-5-5": {
@@ -33,5 +33,8 @@
   "task_prefix": {
     "tb4": "terminal-bench/",
     "swe": ""
+  },
+  "harnesses_paused": {
+    "claude-code": "harbor run -d {dataset} -i {task} -a claude-code -m {model} -n 1 -o {outdir} --job-name run"
   }
 }
