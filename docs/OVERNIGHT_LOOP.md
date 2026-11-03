@@ -145,3 +145,10 @@ Candidate improvements (from dt1/dv8 traces)
   available at handover predicts which takeovers solve. Next real lever is upstream: a stronger cheap builder (fewer
   handovers) or a task-level router trained on more labelled runs (ideas doc section 11), both need new data.
 - Droid expires this morning; nothing is running.
+- 06:00 v3.9 (DeepSeek-V4.1-Flash builder, for fewer takeovers) DROPPED before any run (red team). Key finding: the
+  judge's "ship" is right 0 of 8 times on v3.5's 36 held-out runs (bun x2, glycan x2, protein x2, production r1,
+  roy r2) and 1 of 2 on dev (dv13); every held-out solve came through "fix" + Opus takeover. A better builder cannot
+  cut takeovers while the judge cannot recognise correct work; a cut-short held-out run at Droid expiry would be no
+  result. No paid runs launched after this; Droid still answered at 05:53.
+- Candidate for later (needs new data, not Droid): judge ship precision. The judge sees the build but never runs the
+  task's own checks; "tester as evidence" (ideas doc section 3) is the matching idea.
