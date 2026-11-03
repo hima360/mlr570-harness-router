@@ -152,3 +152,8 @@ Candidate improvements (from dt1/dv8 traces)
   result. No paid runs launched after this; Droid still answered at 05:53.
 - Candidate for later (needs new data, not Droid): judge ship precision. The judge sees the build but never runs the
   task's own checks; "tester as evidence" (ideas doc section 3) is the matching idea.
+- 07:58 v3.10 (takeover310) = v3.5 + no judge/takeover when the builder hit its 50-command limit (LimitsExceeded:
+  0/4 dev and 0/4 held-out takeovers solved; $6.01 of v2.8's held-out spend). Ibrahim asked for it ("Yes", 07:55).
+  Estimate from traces ~$31 for ~11 solves (Unverified). Held-out ho1/ho2 (prefix ho2), ho4, ho5 at the same seeds,
+  36 runs, parallel 5 each, started 07:58. Plans/reports backed up as *.before-v310. If Droid expires mid-run,
+  unfinished runs count as no result.
