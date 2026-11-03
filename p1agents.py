@@ -19,7 +19,7 @@ class HermesPinned(Hermes):
         return 'export PATH="$HOME/.local/bin:$PATH"; hermes --version'
 
     async def install(self, environment: BaseEnvironment) -> None:
-        await self.ensure_system_dependencies(environment, ("curl", "git", "ripgrep", "xz"))
+        await self.ensure_system_dependencies(environment, ("curl", "git", "ripgrep", "xz", "build_tools"))  # installer compiles node-pty; it cannot apt as the agent user
         ref = self._version or "main"
         await self.exec_as_agent(
             environment,
