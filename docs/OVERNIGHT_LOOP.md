@@ -157,3 +157,6 @@ Candidate improvements (from dt1/dv8 traces)
   Estimate from traces ~$31 for ~11 solves (Unverified). Held-out ho1/ho2 (prefix ho2), ho4, ho5 at the same seeds,
   36 runs, parallel 5 each, started 07:58. Plans/reports backed up as *.before-v310. If Droid expires mid-run,
   unfinished runs count as no result.
+- 08:05 HELD FOR LATER (Ibrahim): task ledger (/tmp/LEDGER.json: items with status, owner, proof command; judge
+  re-runs each proof; takeover starts from open/broken items; done items' tool output pruned to stubs), then cross-task
+  lessons. Test it off Droid: Opus via Claude Pro (claude-code backend) + GLM via Z.ai, new config, dev then held-out.
