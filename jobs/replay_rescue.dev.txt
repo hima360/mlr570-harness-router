@@ -1,0 +1,33 @@
+dv8-takeover28-kv-live-surgery                     P=0.03 fail takeover=$0.72
+dv13-takeover35-kv-live-surgery                    P=0.05 fail takeover=$0.51
+dv13-takeover35-risk-scorer-replay                 P=0.12 SOLVED takeover=$1.63
+dv8-takeover28-heat-pump-warranty                  P=0.2 fail takeover=$2.41
+dv8-takeover28-cargo-flight-dispatch               P=0.3 fail takeover=$0.27
+dv8-takeover28-risk-scorer-replay                  P=0.3 SOLVED takeover=$2.55
+dv12-takeover34-payments-pipeline-fix              P=0.3 SOLVED takeover=$1.25
+dv8-takeover28-html-js-filter                      P=0.35 SOLVED takeover=$0.28
+dv8-takeover28-payments-pipeline-fix               P=0.35 SOLVED takeover=$1.28
+dv8-takeover28-react-lead-form                     P=0.35 SOLVED takeover=$0.30
+dv8-takeover28-vf2-speedup-networkx                P=0.35 fail takeover=$0.95
+dv11-takeover31-heat-pump-warranty                 P=0.35 fail takeover=$2.90
+dv11-takeover31-react-lead-form                    P=0.35 fail takeover=$1.76
+dv13-takeover35-payments-pipeline-fix              P=0.35 SOLVED takeover=$0.51
+dv13-takeover35-cargo-flight-dispatch              P=0.45 fail takeover=$0.14
+dv13-takeover35-react-lead-form                    P=0.45 SOLVED takeover=$0.48
+dv8-takeover28-session-window-debug                P=0.55 fail takeover=$0.29
+dv11-takeover31-embedding-drift-monitor            P=0.55 fail takeover=$0.15
+dv11-takeover31-html-js-filter                     P=0.55 fail takeover=$0.82
+dv12-takeover34-html-js-filter                     P=0.55 fail takeover=$0.17
+dv13-takeover35-heat-pump-warranty                 P=0.55 fail takeover=$0.19
+dv8-takeover28-mvcc-lsm-compaction                 P=0.6 fail takeover=$0.26
+dv13-takeover35-html-js-filter                     P=0.6 SOLVED takeover=$0.27
+dv13-takeover35-session-window-debug               P=0.6 fail takeover=$0.27
+dv13-takeover35-vf2-speedup-networkx               P=0.6 fail takeover=$1.77
+dv13-takeover35-embedding-drift-monitor            P=0.62 SOLVED takeover=$0.18
+dv8-takeover28-fin-saccr-rwa                       P=0.72 SOLVED takeover=$0.21
+replay cost $0.30
+skip P<0.1: skips 2 takeovers, loses 0 solves, saves $1.23
+skip P<0.2: skips 3 takeovers, loses 1 solves, saves $2.86
+skip P<0.3: skips 4 takeovers, loses 1 solves, saves $5.27
+skip P<0.4: skips 14 takeovers, loses 7 solves, saves $17.32
+skip P<0.5: skips 16 takeovers, loses 8 solves, saves $17.95

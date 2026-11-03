@@ -126,3 +126,9 @@ Candidate improvements (from dt1/dv8 traces)
   are worse. Lesson: cost must come from FEWER takeovers (the judge handing over less often), not shorter ones.
 - 04:12 v3.5 on ho1/ho2 started (prefix ho2, 6 tasks x2, same seed 570): the only held-out sets v3.5 has not been
   looked at on, to give v3.5 a full 36-run record next to v2.8 and Opus (record, not a tuning step).
+- 04:35 "Fewer takeovers" tested OFFLINE first (scripts/replay_rescue.py, $0.30): on 27 past dev handovers (dv8, dv11,
+  dv12, dv13) Opus was asked the odds that a 60-command takeover passes, from what the judge knew at handover. It does
+  not separate: solves got P=0.12-0.72, failures P=0.03-0.60. Only P<0.1 is clean (2 runs, both kv-live-surgery, one
+  task, $1.23). Skip P<0.3 loses 1 of 11 dev solves for $5.27; P<0.4 loses 7. Not built: the judge cannot foresee a
+  rescue, same as its problem count (red team, v3.8). Builder exit is no better (TimeExceeded builds gave 3 held-out
+  solves). Output: jobs/replay_rescue.dev.txt. Open lever left: none evidence-backed for cost tonight.
