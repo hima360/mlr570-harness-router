@@ -166,3 +166,8 @@ Candidate improvements (from dt1/dv8 traces)
   finished trials: v3.10 5/26 $16.74; v3.5 3/26 $18.67; v2.8 8/26 $24.52; Opus alone 3/26 $21.08. NOT a confirmed
   win: the missing 10 are v3.10's longest (most takeover-heavy) runs, so its cost here is biased low (02:35 lesson);
   3 of them are tasks v2.8/v3.5 solved. The goal stays open until the 10 finish.
+- 09:05 PHASE 2 RUNS OVER (Droid subscription ended ~08:40, confirmed by Ibrahim). v3.10 stopped at 26/36 trials.
+  Same 26 trials: v3.10 5/26 $16.74 | v3.5 3/26 $18.67 | v2.8 8/26 $24.52 | Opus 3/26 $21.08. On the 10 trials
+  v3.10 never finished, v3.5 got 4/10 $17.21, v2.8 3/10 $17.31, Opus 1/9 $10.23; if v3.10 behaved like v3.5 there,
+  its full total would be ~9/36 ~$34 vs Opus 4/35 $31.31 (estimate, Unverified). Goal not confirmed. Page:
+  reports/heldout-final.html (v3.10 column = 26 trials). Improvement loop stopped: no model access left to test with.
