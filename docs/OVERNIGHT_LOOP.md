@@ -132,3 +132,16 @@ Candidate improvements (from dt1/dv8 traces)
   task, $1.23). Skip P<0.3 loses 1 of 11 dev solves for $5.27; P<0.4 loses 7. Not built: the judge cannot foresee a
   rescue, same as its problem count (red team, v3.8). Builder exit is no better (TimeExceeded builds gave 3 held-out
   solves). Output: jobs/replay_rescue.dev.txt. Open lever left: none evidence-backed for cost tonight.
+- 05:50 v3.5 held-out COMPLETE (ho1/ho2/ho4/ho5, 36 runs, same seeds). Final page reports/heldout-final.html:
+  Opus alone 4/35 $31.31 ($7.83/solve); GLM alone 2/34 $3.21; v2.8 11/36 $41.83 ($3.80/solve); v3.5 7/36 $35.88
+  ($5.13/solve). Goal (beat Opus on solves AND total cost) NOT met by any version. v2.8 stays the best version: 2.75x
+  Opus's solves at 34% more total cost and half the cost per solve. v3.5 is cheaper than v2.8 but 4 solves fewer.
+
+## State for a fresh context (05:50, 2026-11-03)
+- Best version: v2.8 (takeover28). Final held-out: reports/heldout-final.html. Goal not met.
+- Tried tonight after v3.5: v3.7 Sonnet-5 takeover (dropped on dev, longer takeovers), v3.8 takeover cap (dropped by
+  red team: the long takeovers are the solves), rescue-odds judge gate (offline replay: no separation, not built).
+- Conclusion: in this design the cost is the Opus takeover and the solves come from long Opus takeovers; no signal
+  available at handover predicts which takeovers solve. Next real lever is upstream: a stronger cheap builder (fewer
+  handovers) or a task-level router trained on more labelled runs (ideas doc section 11), both need new data.
+- Droid expires this morning; nothing is running.
