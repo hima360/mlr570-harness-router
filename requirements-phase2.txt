@@ -1,0 +1,9 @@
+# Phase 2 harness (Python 3.12). Install: uv venv --python 3.12 .venv && uv pip install --python .venv -r requirements-phase2.txt
+harbor==0.24.0
+mini-swe-agent==2.4.6
+laya-mlx==0.1.0
+pytest
+mcp  # litellm needs it whenever tools are passed (worker calls)
+# Optional, for the Arch-Router fallback (the cascade uses Laya alone without them):
+# torch
+# transformers<5

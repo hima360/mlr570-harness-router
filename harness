@@ -1,0 +1,3 @@
+#!/bin/bash
+# ./harness run "your task" ~/your-folder   |   ./harness doctor   |   ./harness tui   (see ./harness -h)
+exec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/python" "$(cd "$(dirname "$0")" && pwd)/scripts/harness.py" "$@"
