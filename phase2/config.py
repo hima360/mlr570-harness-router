@@ -173,6 +173,9 @@ class HarnessConfig:
     # the cache but its takeovers halved (median 9 vs 18.5 calls) and solved 0/14 held-out: v2.8's restart had
     # been restating the task.
     session_nudge_chars: int = 0
+    # v3.10: builder exits that end the run without a judge or takeover (e.g. LimitsExceeded: the builder used its
+    # whole command budget; those takeovers solved 0/4 on dev and 0/4 on held-out). Empty = off.
+    takeover_skip_exits: list[str] = field(default_factory=list)
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180

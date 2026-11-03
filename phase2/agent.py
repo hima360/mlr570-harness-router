@@ -41,7 +41,7 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "takeover_first_wall_sec", "takeover_step_limit", "takeover_fix_first_max_problems",
                "takeover_fix_step_limit", "spec_model", "repo_map", "handoff", "progress_block",
                "progress_patience", "takeover_effort",
-               "session_nudge_chars")
+               "session_nudge_chars", "takeover_skip_exits")
 
 
 class RoutedHarness(BaseAgent):
@@ -277,6 +277,9 @@ class RoutedHarness(BaseAgent):
                           round=rnd, builder_exit=result.exit_status)
                 return verdict, probs
 
+            if first.exit_status in self.cfg.takeover_skip_exits:  # v3.10: no judge, no takeover
+                trace.log("takeover_skipped", step=step.id, builder_exit=first.exit_status)
+                return first
             verdict, probs = judge_now(first, messages, 1)
             if verdict == "ship" and first.exit_status == "Submitted":
                 return first

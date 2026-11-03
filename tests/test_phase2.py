@@ -1912,3 +1912,50 @@ def test_v38_caps_the_takeover_at_20_commands():
     cfg = load_config(SETUPS["takeover38"][2])
     assert cfg.takeover_step_limit == 20 and cfg.takeover_model == "droid/claude-opus-5-5"
     assert cfg.session_budget_chars == 300000
+
+
+def test_v310_no_judge_or_takeover_after_a_builder_that_used_its_whole_budget(tmp_path, monkeypatch):
+    """v3.10: a builder that ends with an exit in takeover_skip_exits keeps its result; no judge, no takeover."""
+    import types
+
+    import phase2.agent as A
+
+    def run(exit_status):
+        calls, judged = [], []
+
+        def fake_run_worker(cfg, ledger, model_id, adapter, *, step, senior=None, **kw):
+            calls.append(model_id)
+            return WorkerResult(exit_status, f"done by {model_id}", 3)
+
+        def fake_chat(cfg, ledger, model, msgs, on_call=None, **kw):
+            judged.append(model)
+            return '{"verdict": "fix", "problems": [{"what": "restart loses data"}]}'
+
+        monkeypatch.setattr(A, "run_worker", fake_run_worker)
+        monkeypatch.setattr(A, "chat", fake_chat)
+        cfg = tmp_path / f"{exit_status}.json"
+        cfg.write_text(json.dumps({"takeover_skip_exits": ["LimitsExceeded"]}))
+        logs = tmp_path / exit_status
+        env = FakeEnvironment(lambda c: ("ok\n", 0) if "cp -a" in c else ("--- a\n+++ b\n", 0) if "diff -rq" in c
+                              else ("/app\n", 0))
+        agent = A.RoutedHarness(logs_dir=logs, model_name=None, config=str(cfg), policy="fixed:1",
+                                max_plan_steps="1", max_escalations="0",
+                                senior_reviewer_model="anthropic/claude-opus-5-5",
+                                takeover_model="anthropic/claude-opus-5-5")
+        asyncio.run(agent.run("keep data across restarts", env, types.SimpleNamespace(metadata=None)))
+        events = [json.loads(l) for l in (logs / "trace.jsonl").read_text().splitlines()]
+        return calls, judged, events
+
+    calls, judged, events = run("LimitsExceeded")
+    assert len(calls) == 1 and not judged and [e for e in events if e["event"] == "takeover_skipped"]
+    calls, judged, events = run("Submitted")
+    assert calls[-1] == "anthropic/claude-opus-5-5" and judged
+
+
+def test_v310_config():
+    from phase2.config import load_config
+    from phase2.setups import SETUPS
+
+    cfg = load_config(SETUPS["takeover310"][2])
+    assert cfg.takeover_skip_exits == ["LimitsExceeded"] and cfg.session_budget_chars == 300000
+    assert load_config().takeover_skip_exits == []

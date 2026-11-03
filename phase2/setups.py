@@ -54,4 +54,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "takeover37": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover37.json"),
     # v3.8: v3.5 with the Opus takeover capped at 20 commands.
     "takeover38": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover38.json"),
+    # v3.10: v3.5 with no judge or takeover after a builder that used its whole command budget.
+    "takeover310": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover310.json"),
 }
