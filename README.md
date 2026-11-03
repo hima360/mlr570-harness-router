@@ -61,3 +61,86 @@ output_tokens, cached_tokens, tool_calls, cost_usd, runner_commit, outdir`
 
 Paste this README and `RULES.md` into Claude or Codex and ask it to do the smoke test for your
 harnesses. Tell it explicitly not to edit `plan.tsv`, the prices or the log fields.
+
+## Phase 2 harness (`phase2/`)
+
+Design: `docs/PHASE2_PLAN.md`.
+### Versions
+
+- **Main version: v3.10** (setup `main`, alias of `takeover310`, config `configs/phase2-droid-glm-takeover310.json`).
+  GLM-5.3 Flash builds; Opus 5.5 judges once and, on "fix", takes over in the same container; Opus's session is
+  kept whole (300k chars) so its prompt cache holds; no judge or takeover when the builder used its whole command
+  budget. Held-out (seeds 570-572), same 26 trials: v3.10 5/26 $16.74, Opus alone 3/26 $21.08, v2.8 8/26 $24.52.
+  The other 10 trials were cut off when the Droid subscription ended; they were v3.10's longest runs, so its full
+  cost is likely higher (~$34 for ~9/36 if it matched v3.5 there; Unverified).
+- **v2.8** is kept on branch `phase2/v2.8` and tag `phase2-v2.8` (setup `takeover28`): most solves, 11/36 for
+  $41.83 vs Opus alone 4/35 $31.31 on the full held-out.
+- Why v3.10 costs less than v2.8 (same 26 trials, $16.74 vs $24.52): Opus works less, 207 takeover calls vs 333
+  (shorter takeovers, and 2 runs the judge shipped without one), and each call is cheaper because the session is
+  not restarted, so the prompt cache holds. The price is fewer rescues (hof r1: v2.8 solved in 10 calls, v3.10
+  stopped at 6). The 10 cut-off trials only matter against v3.10's full total and Opus alone.
+  Full log: `docs/OVERNIGHT_LOOP.md`; page: `reports/heldout-final.html`.
+
+Setup and checks:
+
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv -r requirements-phase2.txt
+.venv/bin/python -m pytest tests -q
+```
+
+Harbor smoke test with a scripted model server (no subscription needed; needs Docker with `docker compose`):
+
+```bash
+.venv/bin/python tests/harbor_smoke/stub_llm_server.py 18999 &
+PYTHONPATH=$PWD .venv/bin/harbor run -p tests/harbor_smoke/hello-file -a phase2.agent:RoutedHarness \
+  --ak base_url=http://127.0.0.1:18999/v1 --ak policy=fixed:0 -n 1 -o jobs --job-name smoke
+.venv/bin/python -m phase2.show_trace jobs/smoke/*/agent
+```
+
+Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence threshold), `laya`, `arch`,
+`random`, `fixed:<tier>` (`fixed:3` = always Opus, `fixed:0` = always cheapest).
+
+### Easy mode
+
+| To | Do |
+|---|---|
+| Be asked what to do, step by step | `./harness` (nothing after it) |
+| Try it on a tiny bundled project | `./harness try` |
+| Give it your own task on your own folder | `./harness run "fix the failing login test" ~/my-project --check "pytest -q"` (works on a copy in a sandbox, shows the diff, asks before applying) |
+| Check the setup | `./harness doctor` |
+| Watch runs, compare results, start a run | double-click `Harness.command` (keys: `n` new run, `c` compare, `/` filter, `?` help) |
+| Show the TUI on a recorded run (no Docker, no credits) | double-click `Demo.command` |
+| See how far an evaluation is | `.venv/bin/python scripts/progress.py [prefix] [-w]` |
+| Get a results page to open in a browser | `.venv/bin/python scripts/report_html.py <prefix> [<prefix> ...]` (writes `reports/`) |
+| Run an evaluation unattended | `scripts/supervise.sh --config ... --prefix <p> --setups a,b --repeats 2 <tasks>` |
+| Draw new held-out tasks | `.venv/bin/python scripts/draw_heldout.py --seed <n>` |
+
+### TUI (start, watch, browse and stop runs)
+
+```bash
+.venv/bin/python -m phase2.tui
+```
+
+- `c` **Compare results**: pick an evaluation; one line per setup (solved, tests passed, tokens, cost, cost per
+  solve, minutes per run, best setup in green), each task's runs per setup, and how far it is (refreshes).
+- `n` **New run** has an *Evaluation setup* picker (`opus`, `glm`, `glmreview26`, ...) that fills in the config,
+  policy and limits that setup uses in `scripts/run_compare.py` (`phase2/setups.py`).
+- The filter box above the jobs list keeps runs whose name or status has every word typed (`ho4 running`).
+- One design across the TUI, `reports/*.html` and the deck: ink and paper with a terracotta accent and calm
+  status colours (theme `mlr570` in `phase2/tui.py`; Ctrl+P, "Change theme" switches it).
+
+- Sidebar: `+ New run` and every job in `jobs/` (● running, ✓ passed, ✗ failed, ! error, ■ stopped).
+- Main pane: the roles box shows who actually did each job in that run (planner model, router that decided,
+  worker models with calls, time, tokens and credits or list-price cost, verifier results, tier table).
+  Tabs: **Who did what** (one line per planner/router/worker/verifier action), **Steps**, **Worker turns**
+  (the model's text and each command's output), **Harbor log**.
+- Keys: `n` new run (task, backend config, policy, caps: max steps, turns per step, idle limit; shows the exact
+  `harbor run` command),
+  `s` stop the selected running job (kills its process group, removes its container and network),
+  `r` refresh, `q` quit. Runs start under `caffeinate -i` and keep going if the TUI is closed.
+- Everything comes from the run's own `trace.jsonl`, worker trajectories and Harbor `result.json`.
+  Keep the lid open: a sleeping Mac pauses the run and drops the model connections.
+- Limits: each model call 180 s (retried once); a step attempt ends after `step_idle_sec` (600) without a model
+  reply, or at the 1 h cap; a failed attempt escalates one tier and hands its notes to the next model.
+- `droid/` models use the Factory app's bundled `droid` (`/Applications/Factory.app/Contents/Resources/bin/droid`)
+  unless `PHASE2_DROID_BIN` is set; an older `droid` on PATH can reject current model ids.

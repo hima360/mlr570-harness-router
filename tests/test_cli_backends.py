@@ -1,0 +1,782 @@
+"""CLI model backends (Droid, Claude Code), credit pricing and tier scaling. Fake CLIs: no network."""
+import asyncio
+import json
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("MSWEA_SILENT_STARTUP", "1")
+
+from phase2 import droid
+from phase2.config import load_config
+from phase2.ledger import Ledger
+from phase2.planner import Step
+from phase2.router import Router
+from phase2.worker import SUBMIT, HarborEnvAdapter, bounded, run_worker
+from tests.fakes import FakeEnvironment, FakeScorer
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _result_line(text, **usage):
+    u = {"input_tokens": 100, "output_tokens": 7, "cache_read_input_tokens": 0,
+         "cache_creation_input_tokens": 0, "factory_credits": 50, **usage}
+    return json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": text, "usage": u})
+
+
+def test_droid_complete_uses_fake_run():
+    seen = {}
+
+    def fake_run(argv, cwd, capture_output, text, timeout):
+        seen["argv"] = argv
+        seen["prompt"] = Path(argv[argv.index("-f") + 1]).read_text()
+        out = "progress noise\n" + _result_line("hi there", input_tokens=10, cache_read_input_tokens=30,
+                                                cache_creation_input_tokens=5, factory_credits=465)
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    text, usage = droid.complete("droid/glm-5.3-flash", [{"role": "system", "content": "be brief"},
+                                                         {"role": "user", "content": "say hi"}], run=fake_run)
+    assert text == "hi there"
+    assert seen["argv"][0].endswith("droid") and seen["argv"][1:6] == ["exec", "-m", "glm-5.3-flash", "-o", "json"]
+    assert seen["argv"][seen["argv"].index("--only-tools") + 1] == "TodoWrite"
+    assert "### SYSTEM\nbe brief" in seen["prompt"] and seen["prompt"].endswith("### ASSISTANT\n")
+    assert usage["prompt_tokens"] == 45 and usage["prompt_tokens_details"]["cached_tokens"] == 30
+    assert usage["completion_tokens"] == 7 and usage["factory_credits"] == 465
+
+
+def test_droid_binary_choice(monkeypatch, tmp_path):
+    monkeypatch.setenv("PHASE2_DROID_BIN", "/opt/droid")
+    assert droid.droid_bin() == "/opt/droid"
+    monkeypatch.delenv("PHASE2_DROID_BIN")
+    monkeypatch.setattr(droid, "APP_DROID", str(tmp_path / "missing"))
+    assert droid.droid_bin() == "droid"
+    app = tmp_path / "droid"
+    app.write_text("")
+    monkeypatch.setattr(droid, "APP_DROID", str(app))
+    assert droid.droid_bin() == str(app)
+
+
+def test_droid_complete_raises_on_error_result():
+    def fake_run(argv, **kw):
+        line = json.dumps({"type": "result", "is_error": True, "result": "Provider not available"})
+        return subprocess.CompletedProcess(argv, 1, stdout=line, stderr="")
+
+    with pytest.raises(RuntimeError, match="droid exec failed"):
+        droid.complete("droid/kimi-k3", [{"role": "user", "content": "x"}], run=fake_run)
+
+
+def test_ledger_bills_droid_in_credits():
+    from harbor.models.agent.context import AgentContext
+
+    usage = {"prompt_tokens": 7314, "completion_tokens": 5, "factory_credits": 465}
+    led = Ledger({}, credits_usd=0.001)
+    assert led.add_from_usage("droid/glm-5.3-flash", usage) == pytest.approx(0.465)
+    led.add_from_usage("droid/glm-5.3-flash", usage)
+    ctx = AgentContext()
+    led.fill_context(ctx)
+    assert ctx.cost_usd == pytest.approx(0.93) and ctx.n_input_tokens == 2 * 7314
+    assert ctx.metadata["factory_credits"] == {"droid/glm-5.3-flash": 930}
+
+    unpriced = Ledger({})  # no USD rate known: credits counted, cost stays 0
+    assert unpriced.add_from_usage("droid/gpt-6-sol", usage) == 0.0
+    assert unpriced.credits_report()["factory_credits_total"] == 465
+
+
+def test_droid_config_tiers():
+    cfg = load_config(ROOT / "configs/phase2-droid.json")
+    assert all(m.startswith("droid/") and "claude" not in m for m in cfg.tiers)
+    assert cfg.planner_model == cfg.tiers[-1] == "droid/gpt-6-sol"
+    mult = cfg.factory_credit["multipliers"]
+    assert [mult[m] for m in cfg.tiers] == sorted(mult[m] for m in cfg.tiers)
+    assert cfg.factory_credit["source"].startswith("https://") and cfg.factory_credit["checked"]
+
+
+@pytest.mark.parametrize("n_tiers,score,tier", [
+    (3, 0.9, 0), (3, 1.0, 1), (3, 2.0, 1),        # one routable tier above the cheapest
+    (4, 0.4, 0), (4, 0.5, 1), (4, 1.5, 2),         # 0..2 maps 1:1
+    (6, 1.0, 2), (6, 1.9, 4), (6, -1.0, 0),        # 0..4: score stretched, clipped
+])
+def test_router_scales_score_onto_tiers(n_tiers, score, tier):
+    tiers = [f"droid/m{i}" for i in range(n_tiers)]
+    cfg = load_config(tiers=tiers, planner_model=tiers[-1], policy="laya")
+    assert Router(cfg, laya=FakeScorer((score, 1.0)), arch=None).route("s", "x").tier == tier
+
+
+@pytest.mark.parametrize("model_id", ["droid/glm-5.3-flash", "claude/claude-haiku-5-5"])
+def test_worker_with_cli_text_model(model_id, capfd):
+    from phase2.cli_models import make_text_model
+
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\nwrote hello.txt\n", 0) if SUBMIT in cmd else ("ok", 0))
+    replies = iter([
+        "THOUGHT: write it\n\n```mswea_bash_command\necho hello > /app/hello.txt\n```",
+        f"THOUGHT: done\n\n```mswea_bash_command\nprintf '{SUBMIT}\\nwrote hello.txt\\n'\n```",
+    ])
+    prompts = []
+
+    def fake_complete(model, messages):
+        prompts.append(messages)
+        return next(replies), {"prompt_tokens": 7000, "completion_tokens": 20,
+                               "prompt_tokens_details": {"cached_tokens": 0}, "factory_credits": 420}
+
+    led = Ledger(load_config(ROOT / "configs/phase2-claude-code.json").prices_per_million, credits_usd=None)
+    model = make_text_model(model_id, lambda u, *_: led.add_from_usage(model_id, u), complete_fn=fake_complete)
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        return await asyncio.to_thread(run_worker, load_config(), led, model_id, adapter, task_overall="T",
+                                       step=Step(id="s1", goal="make hello.txt", writes=["/app/hello.txt"]),
+                                       blackboard_text="-", model=model)
+
+    res = asyncio.run(main())
+    assert res.exit_status == "Submitted" and res.summary == "wrote hello.txt" and res.n_calls == 2
+    assert env.commands[0] == bounded("echo hello > /app/hello.txt", 30)
+    assert "mswea_bash_command" in prompts[0][-1]["content"]
+    assert led.by_model[model_id].factory_credits == 840 and led.totals().calls == 2
+    assert "Provider List" not in "".join(capfd.readouterr())  # no litellm pricing lookups for CLI ids
+
+
+# ---------- Claude Code backend (fake `claude -p`, no subscription usage) ----------
+
+def test_cli_backend_dispatch():
+    from phase2 import claude_code
+    from phase2.cli_models import complete_fn_for
+
+    assert complete_fn_for("droid/glm-5.3-flash") is droid.complete
+    assert complete_fn_for("claude/claude-haiku-5-5") is claude_code.complete
+    assert complete_fn_for("anthropic/claude-opus-5-5") is None  # opencodex id
+
+
+def test_claude_code_complete_uses_fake_run(monkeypatch):
+    from phase2 import claude_code
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-leak")
+    seen = {}
+
+    def fake_run(argv, input, cwd, env, capture_output, text, timeout):
+        seen.update(argv=argv, input=input, env=env)
+        out = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done",
+                          "total_cost_usd": 0.0123,
+                          "usage": {"input_tokens": 20, "cache_creation_input_tokens": 100,
+                                    "cache_read_input_tokens": 300, "output_tokens": 9}})
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    text, usage = claude_code.complete("claude/claude-haiku-5-5",
+                                       [{"role": "system", "content": "be a shell agent"},
+                                        {"role": "user", "content": "list files"}], run=fake_run)
+    argv = seen["argv"]
+    assert text == "done" and argv[:4] == ["claude", "-p", "--model", "claude-haiku-5-5"]
+    assert argv[argv.index("--tools") + 1] == "" and "--safe-mode" in argv
+    assert "be a shell agent" in argv[argv.index("--system-prompt") + 1]
+    assert "### USER\nlist files" in seen["input"] and "be a shell agent" not in seen["input"]
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
+    assert usage["prompt_tokens"] == 420 and usage["prompt_tokens_details"]["cached_tokens"] == 300
+    assert usage["completion_tokens"] == 9 and usage["claude_code_cost_usd"] == 0.0123
+
+
+def test_claude_code_config_and_list_price_cost():
+    from harbor.models.agent.context import AgentContext
+
+    cfg = load_config(ROOT / "configs/phase2-claude-code.json")
+    assert cfg.planner_model == cfg.tiers[-1] == "claude/claude-opus-5-5" and cfg.max_route_tier == 1
+    led = Ledger(cfg.prices_per_million)
+    c = led.add_from_usage("claude/claude-sonnet-5-5", {"prompt_tokens": 1_000_000, "completion_tokens": 100_000,
+                                                        "prompt_tokens_details": {"cached_tokens": 500_000},
+                                                        "claude_code_cost_usd": 3.5})
+    assert c == pytest.approx(0.5 * 2 + 0.5 * 0.10 + 0.1 * 10)
+    ctx = AgentContext()
+    led.fill_context(ctx)
+    assert ctx.metadata == {"claude_code_cost_usd": {"claude/claude-sonnet-5-5": 3.5}}
+
+
+# ---------- effort pinning and retry ----------
+
+@pytest.fixture(autouse=True)
+def _no_retry_wait(monkeypatch):
+    from phase2 import cli_models
+
+    monkeypatch.setattr(cli_models, "RETRY_WAIT_SEC", 0)
+
+
+def _ok_run(calls, fail_first=0, fail_stdout="Invalid model: x"):
+    def run(argv, **kw):
+        calls.append(argv)
+        if len(calls) <= fail_first:
+            return subprocess.CompletedProcess(argv, 1, stdout=fail_stdout, stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+    return run
+
+
+def test_effort_comes_from_config():
+    from phase2.cli_models import complete_fn_for
+
+    for path, model, flag in (("configs/phase2-droid.json", "droid/gpt-6-sol", "-r"),
+                              ("configs/phase2-claude-code.json", "claude/claude-opus-5-5", "--effort")):
+        cfg = load_config(ROOT / path)
+        assert set(cfg.reasoning_effort) == set(cfg.tiers)
+        calls = []
+        complete_fn_for(model, cfg)(model, [{"role": "user", "content": "x"}], run=_ok_run(calls))
+        assert calls[0][calls[0].index(flag) + 1] == cfg.reasoning_effort[model]
+    calls = []
+    droid.complete("droid/kimi-k3", [{"role": "user", "content": "x"}], run=_ok_run(calls))
+    assert "-r" not in calls[0]  # no pin -> CLI default
+
+
+def test_cli_retries_once_when_no_turn_ran():
+    calls = []
+    text, _ = droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                             run=_ok_run(calls, fail_first=1))
+    assert text == "ok" and len(calls) == 2
+
+    zero_turns = json.dumps({"type": "result", "is_error": True, "num_turns": 0, "result": "Exec failed"})
+    calls = []
+    with pytest.raises(RuntimeError):
+        droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                       run=_ok_run(calls, fail_first=9, fail_stdout=zero_turns))
+    assert len(calls) == 2
+
+
+def test_cli_does_not_retry_after_a_model_turn():
+    from phase2 import claude_code
+
+    after_turn = json.dumps({"type": "result", "is_error": True, "num_turns": 1,
+                             "result": "Failed to authenticate"})
+    calls = []
+    with pytest.raises(RuntimeError, match="authenticate"):
+        claude_code.complete("claude/claude-haiku-5-5", [{"role": "user", "content": "x"}],
+                             run=_ok_run(calls, fail_first=9, fail_stdout=after_turn))
+    assert len(calls) == 1
+
+
+def test_cli_timeout_from_config_and_retried_once():
+    from phase2.cli_models import complete_fn_for
+
+    cfg = load_config(ROOT / "configs/phase2-droid.json", cli_timeout_sec=42)
+    seen = []
+
+    def stalls_once(argv, timeout, **kw):
+        seen.append(timeout)
+        if len(seen) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+
+    text, _ = complete_fn_for("droid/glm-5.3-flash", cfg)("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                                                       run=stalls_once)
+    assert text == "ok" and seen == [42, 42]
+
+    def always_stalls(argv, timeout, **kw):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    with pytest.raises(RuntimeError, match="timed out after 42 s"):
+        complete_fn_for("droid/glm-5.3-flash", cfg)("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                                                   run=always_stalls)
+
+
+def test_run_group_timeout_kills_helper_processes():
+    import time
+
+    from phase2.cli_models import run_group
+
+    t0 = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_group(["sh", "-c", "sleep 30 & sleep 30"], timeout=0.5)  # background child holds the pipe
+    assert time.monotonic() - t0 < 5
+    assert run_group(["sh", "-c", "cat"], input="hi", timeout=5).stdout == "hi"
+
+
+# ---------- stall prevention: step wall-clock budget and output clipping ----------
+
+def test_worker_stops_at_step_wall_time():
+    import time as _time
+
+    from phase2.cli_models import make_text_model
+
+    env = FakeEnvironment(lambda cmd: ("ok", 0))
+
+    def slow_complete(model, messages):
+        _time.sleep(0.6)
+        return "THOUGHT: look\n\n```mswea_bash_command\nls\n```", {"prompt_tokens": 10, "completion_tokens": 2}
+
+    led = Ledger({}, credits_usd=None)
+    model_id = "droid/glm-5.3-flash"
+    model = make_text_model(model_id, lambda u, *_: led.add_from_usage(model_id, u), complete_fn=slow_complete)
+    cfg = load_config(step_wall_time_sec=1, worker_step_limit=50)
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        return await asyncio.to_thread(run_worker, cfg, led, model_id, adapter, task_overall="T",
+                                       step=Step(id="s1", goal="g"), blackboard_text="-", model=model)
+
+    t0 = _time.monotonic()
+    res = asyncio.run(main())
+    assert res.exit_status == "TimeExceeded" and res.n_calls == 2 and _time.monotonic() - t0 < 3
+
+
+def test_long_command_output_is_clipped():
+    from phase2.worker import clip_output
+
+    env = FakeEnvironment(lambda cmd: ("A" * 6000 + "B" * 6000, 0))
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30, max_output_chars=1000)
+        return await asyncio.to_thread(adapter.execute, {"command": "cat big"})  # sync API, worker thread
+
+    out = asyncio.run(main())["output"]
+    assert out.startswith("A" * 500) and out.endswith("B" * 500) and "elided" in out
+    assert clip_output("short", 1000) == "short" and clip_output("x" * 50, 0) == "x" * 50
+
+
+# ---------- who did what: every actor is recorded ----------
+
+def test_actor_records_for_planner_router_and_worker(monkeypatch):
+    from phase2 import llm
+    from phase2.cli_models import make_text_model
+
+    monkeypatch.setattr(droid, "complete", lambda model, messages, **kw: (
+        "PLAN TEXT", {"prompt_tokens": 900, "completion_tokens": 40, "factory_credits": 700}))
+    cfg = load_config(ROOT / "configs/phase2-droid.json")
+    calls = []
+    assert llm.chat(cfg, Ledger({}), "droid/gpt-6-sol", [{"role": "user", "content": "plan"}],
+                    on_call=calls.append) == "PLAN TEXT"
+    assert calls[0]["model"] == "droid/gpt-6-sol" and calls[0]["input_tokens"] == 900
+    assert calls[0]["factory_credits"] == 700 and calls[0]["reply"] == "PLAN TEXT" and "ms" in calls[0]
+
+    d = Router(load_config(policy="laya"), laya=FakeScorer((1.0, 0.9)), arch=None).route("s", "x")
+    assert d.router == "FakeScorer"
+    assert Router(load_config(policy="fixed:2"), laya=None, arch=None).route("s", "x").router.startswith("fixed policy")
+    from phase2.router import LayaScorer
+    assert Router(load_config(policy="laya"), laya=LayaScorer(), arch=None).laya.name.startswith("Laya")
+
+    worker_calls = []
+    led = Ledger({})
+    from phase2.worker import _make_model
+    m = _make_model(cfg, led, "droid/glm-5.3-flash", on_call=worker_calls.append)
+    m._query([{"role": "user", "content": "go"}])
+    assert worker_calls[0]["model"] == "droid/glm-5.3-flash" and led.totals().calls == 1
+
+
+def test_idle_limit_stops_a_stuck_step_but_not_a_slow_one():
+    import time as _time
+
+    from phase2.cli_models import make_text_model
+
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\ndone\n", 0) if SUBMIT in cmd else ("ok", 0))
+    model_id = "droid/glm-5.3-flash"
+
+    def run(complete, idle):
+        led = Ledger({})
+        model = make_text_model(model_id, lambda u, *_: led.add_from_usage(model_id, u), complete_fn=complete,
+                                idle_sec=idle)
+        cfg = load_config(step_idle_sec=idle, worker_step_limit=20)
+
+        async def main():
+            adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+            return await asyncio.to_thread(run_worker, cfg, led, model_id, adapter, task_overall="T",
+                                           step=Step(id="s1", goal="g"), blackboard_text="-", model=model)
+        return asyncio.run(main())
+
+    replies = iter(["```mswea_bash_command\nls\n```"] * 3 + [f"```mswea_bash_command\nprintf '{SUBMIT}\\ndone\\n'\n```"])
+
+    def slow_but_working(model, messages):
+        _time.sleep(0.4)
+        return next(replies), {"prompt_tokens": 1, "completion_tokens": 1}
+
+    assert run(slow_but_working, 0.6).exit_status == "Submitted"  # 4 calls x 0.4 s > 0.6 s total, never idle
+
+    def stuck(model, messages):
+        _time.sleep(0.7)
+        raise RuntimeError("droid exec failed: Connection error.")
+
+    t0 = _time.monotonic()
+    res = run(stuck, 0.5)
+    assert res.exit_status == "StepIdle" and "no model reply" in res.summary and _time.monotonic() - t0 < 10
+
+
+ZERO_TURNS = json.dumps({"type": "result", "is_error": True, "num_turns": 0, "result": "Exec failed"})
+
+
+def test_slow_zero_turn_failure_fails_fast_and_is_reported(monkeypatch):
+    from phase2 import cli_models
+
+    monkeypatch.setattr(cli_models, "QUICK_FAIL_MS", 0)  # every failure counts as slow
+    seen, calls = [], []
+    with cli_models.report_failures(seen.append), pytest.raises(cli_models.ProviderUnavailable):
+        droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}],
+                       run=_ok_run(calls, fail_first=9, fail_stdout=ZERO_TURNS))
+    assert len(calls) == 1  # no second ~80 s attempt
+    assert seen and seen[0]["kind"] == "provider_unavailable" and seen[0]["model"] == "droid/glm-5.3-flash"
+    assert seen[0]["will_retry"] is False
+
+
+def test_timeout_is_reported_with_retry_flag():
+    from phase2 import cli_models
+
+    def run(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 180)
+
+    seen = []
+    with cli_models.report_failures(seen.append), pytest.raises(RuntimeError, match="timed out"):
+        droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}], run=run)
+    assert [(s["kind"], s["will_retry"]) for s in seen] == [("timeout", True), ("timeout", False)]
+
+
+def test_mini_swe_agent_does_not_retry_provider_unavailable():
+    from phase2 import cli_models
+
+    calls = []
+
+    def down(model, messages):
+        calls.append(1)
+        raise cli_models.ProviderUnavailable("droid exec failed (rc=1): Exec failed")
+
+    env = FakeEnvironment()
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, complete_fn=down)
+        return await asyncio.to_thread(run_worker, load_config(), Ledger({}), "droid/glm-5.3-flash", adapter,
+                                       task_overall="T", step=Step(id="s1", goal="g"), blackboard_text="-",
+                                       model=model)
+
+    res = asyncio.run(main())
+    assert res.exit_status == "ProviderUnavailable" and len(calls) == 1
+
+
+def test_planner_retries_once_when_provider_unavailable(monkeypatch):
+    from phase2 import cli_models, llm
+
+    monkeypatch.setattr(llm, "PLANNER_RETRY_WAIT_SEC", 0)
+    calls = []
+
+    def flaky(model, messages):
+        calls.append(1)
+        if len(calls) == 1:
+            raise cli_models.ProviderUnavailable("down")
+        return "plan", {"prompt_tokens": 10, "completion_tokens": 2}
+
+    monkeypatch.setattr(cli_models, "complete_fn_for", lambda model, cfg=None: flaky)
+    cfg = load_config(ROOT / "configs/phase2-droid.json")
+    assert llm.chat(cfg, Ledger({}), "droid/gpt-6-sol", [{"role": "user", "content": "x"}]) == "plan"
+    assert len(calls) == 2
+
+
+def test_droid_config_has_no_deepseek():
+    cfg = load_config(ROOT / "configs/phase2-droid.json")
+    assert not any("deepseek" in m for m in cfg.tiers + list(cfg.reasoning_effort))
+
+
+def test_two_timeouts_end_the_step_attempt_without_mini_retries():
+    from phase2 import cli_models
+
+    calls = []
+
+    def always_stalls(argv, timeout, **kw):
+        calls.append(1)
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    cfg = load_config(ROOT / "configs/phase2-droid.json", cli_timeout_sec=1)
+    complete = cli_models.complete_fn_for("droid/glm-5.3-flash", cfg)
+    env = FakeEnvironment()
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None,
+                                           complete_fn=lambda m, msgs: complete(m, msgs, run=always_stalls))
+        return await asyncio.to_thread(run_worker, cfg, Ledger({}), "droid/glm-5.3-flash", adapter,
+                                       task_overall="T", step=Step(id="s1", goal="g"), blackboard_text="-",
+                                       model=model)
+
+    res = asyncio.run(main())
+    # one CLI call + its retry, then the attempt ends (before: mini-swe-agent retried up to 10 times)
+    assert res.exit_status == "ModelTimedOut" and len(calls) == 2
+
+
+def test_one_timeout_then_reply_keeps_going():
+    from phase2 import cli_models
+
+    seen = []
+
+    def stalls_once(argv, timeout, **kw):
+        seen.append(1)
+        if len(seen) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+
+    text, _ = droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "x"}], run=stalls_once)
+    assert text == "ok" and not issubclass(cli_models.ModelTimedOut, cli_models.ProviderUnavailable)
+
+
+# ---------- practices from Claude Code / Droid / oh-my-pi / Terminus ----------
+
+def test_guard_reply_cuts_invented_turns_and_extra_commands():
+    from phase2.cli_models import guard_reply
+
+    one = "THOUGHT: x\n```mswea_bash_command\nls\n```"
+    assert guard_reply(one) == (one, "")
+    text, why = guard_reply(one + "\n### USER\n<returncode>0</returncode>\n```mswea_bash_command\nrm -rf /\n```")
+    assert text == one and why == "invented_turn"
+    text, why = guard_reply(one + "\nthen\n```mswea_bash_command\npwd\n```")
+    assert text == one and why == "2_commands"
+
+
+def test_timeout_retry_tells_the_model_to_be_shorter():
+    from phase2 import claude_code
+    from phase2.cli_models import RETRY_NOTE
+
+    inputs = []
+
+    def run(argv, input=None, timeout=None, **kw):
+        inputs.append(input)
+        if len(inputs) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout=_result_line("ok"), stderr="")
+
+    text, _ = claude_code.complete("claude/claude-haiku-5-5", [{"role": "user", "content": "x"}], run=run)
+    assert text == "ok" and RETRY_NOTE not in inputs[0] and RETRY_NOTE in inputs[1]
+
+
+def test_reply_cut_at_output_limit_runs_nothing():
+    from phase2 import cli_models
+
+    model = cli_models.make_text_model(
+        "claude/claude-haiku-5-5", lambda *a: None,
+        complete_fn=lambda m, msgs: ("THOUGHT: long\n```mswea_bash_command\nrm -rf /app\n```",
+                                     {"prompt_tokens": 1, "completion_tokens": 8000, "truncated": True}))
+    out = model._query([{"role": "user", "content": "go"}])
+    assert "mswea_bash_command" not in out.choices[0].message.content
+
+
+def test_reminder_and_soft_budget_reach_the_newest_message():
+    from phase2 import cli_models
+
+    seen = []
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, reminder="STEP s1",
+                                       step_limit=7, complete_fn=lambda m, msgs: seen.append(msgs) or ("x", {"prompt_tokens": 1, "completion_tokens": 1}))
+    model._query([{"role": "user", "content": "go"}])
+    assert seen[0][-1]["content"].endswith("[Reminder] STEP s1")
+    model._query([{"role": "user", "content": "go"}])
+    assert "actions left" in seen[1][-1]["content"]
+
+
+def test_submit_gate_sends_a_failed_check_back_once_then_accepts():
+    from phase2.planner import Step
+    from phase2.worker import SubmitGate
+
+    state = {"check": 1}
+    env = FakeEnvironment(lambda cmd: (f"{SUBMIT}\ndone\n", 0) if SUBMIT in cmd else
+                          ("value wrong", state["check"]) if "check-s1" in cmd else ("", 0))
+    step = Step(id="s1", goal="g", check="check-s1")
+
+    async def main():
+        gate = SubmitGate(HarborEnvAdapter(env, asyncio.get_running_loop(), 30), step, 30, max_blocks=1)
+        first = await asyncio.to_thread(gate.execute, {"command": f"printf '{SUBMIT}\\ndone\\n'"})
+        try:
+            await asyncio.to_thread(gate.execute, {"command": f"printf '{SUBMIT}\\ndone\\n'"})
+        except Exception as e:
+            return first, type(e).__name__
+        return first, None
+
+    first, second = asyncio.run(main())
+    assert first["output"].startswith("NOT DONE YET: the step's check failed") and "value wrong" in first["output"]
+    assert "check-s1" not in first["output"] and second == "Submitted"  # the check command itself stays hidden
+
+
+def test_command_timeout_keeps_partial_output_and_honours_requests():
+    from phase2.worker import NONINTERACTIVE_ENV
+
+    seen = []
+
+    class Env(FakeEnvironment):
+        async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
+            seen.append((timeout_sec, env))
+            return await super().exec(command, cwd, env, timeout_sec, user)
+
+    env = Env(lambda cmd: ("partial", 124))
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        return (await asyncio.to_thread(adapter.execute, {"command": "make"}),
+                await asyncio.to_thread(adapter.execute, {"command": "# timeout: 600\nmake"}))
+
+    first, _ = asyncio.run(main())
+    assert "partial" in first["output"] and "timed out after about 20 s" in first["output"]
+    assert seen[0] == (30, NONINTERACTIVE_ENV) and seen[1][0] == 600
+
+
+# ---------- CLI sessions: send only new turns so the provider caches the prefix ----------
+
+def _session_line(text, sid, **usage):
+    return json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": text,
+                       "session_id": sid, "usage": usage, **({"total_cost_usd": usage.pop("cost")} if "cost" in usage else {})})
+
+
+def test_droid_session_sends_only_new_turns_and_converts_running_totals():
+    from phase2.cli_models import CliSession
+
+    calls = []
+
+    def run(argv, cwd=None, **kw):
+        calls.append((argv, Path(argv[argv.index("-f") + 1]).read_text()))
+        totals = [dict(input_tokens=18000, output_tokens=40, cache_read_input_tokens=0, factory_credits=1100),
+                  dict(input_tokens=18100, output_tokens=60, cache_read_input_tokens=18000, factory_credits=1330)]
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "S1", **totals[len(calls) - 1]), stderr="")
+
+    s = CliSession()
+    first = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "task"}]
+    _, u1 = droid.complete("droid/glm-5.3-flash", first, run=run, session=s)
+    _, u2 = droid.complete("droid/glm-5.3-flash", [{"role": "user", "content": "obs 1"}], run=run, session=s)
+    assert "-s" not in calls[0][0] and calls[1][0][calls[1][0].index("-s") + 1] == "S1"
+    assert "### USER" in calls[0][1] and calls[1][1] == "obs 1"  # resume sends the new turn only
+    assert u1["factory_credits"] == 1100 and u2["factory_credits"] == 230  # running totals -> per call
+    assert u2["prompt_tokens_details"]["cached_tokens"] == 18000 and u2["completion_tokens"] == 20
+
+
+def test_claude_session_resumes_with_the_same_system_prompt_and_per_call_cost():
+    from phase2 import claude_code
+    from phase2.cli_models import CliSession
+
+    calls = []
+
+    def run(argv, input=None, **kw):
+        calls.append((argv, input))
+        cost = [0.0045, 0.0049][len(calls) - 1]
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "C1", input_tokens=2,
+                                           cache_read_input_tokens=21000 * (len(calls) - 1), output_tokens=5,
+                                           cost=cost), stderr="")
+
+    s = CliSession()
+    claude_code.complete("claude/claude-haiku-5-5", [{"role": "system", "content": "SYS"},
+                                                     {"role": "user", "content": "task"}], run=run, session=s)
+    _, u = claude_code.complete("claude/claude-haiku-5-5", [{"role": "user", "content": "obs"}], run=run, session=s)
+    a1, a2 = calls[0][0], calls[1][0]
+    assert "--resume" not in a1 and a2[a2.index("--resume") + 1] == "C1" and "--no-session-persistence" not in a1
+    assert a1[a1.index("--system-prompt") + 1] == a2[a2.index("--system-prompt") + 1]  # cached prefix intact
+    assert calls[1][1] == "obs" and abs(u["claude_code_cost_usd"] - 0.0004) < 1e-9
+
+
+def test_text_model_session_resumes_then_restarts_past_its_budget_and_after_errors():
+    from phase2 import cli_models
+
+    sent = []
+
+    def fake(model, msgs, session=None):
+        sent.append(("resume" if session.id else "new", [m["content"] for m in msgs]))
+        if len(sent) == 3:  # the third call (a resume) fails: the session is lost
+            raise RuntimeError("session not found")
+        session.id = session.id or f"S{len(sent)}"
+        return "```mswea_bash_command\nls\n```", {"prompt_tokens": 1, "completion_tokens": 1}
+
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, complete_fn=fake,
+                                       context_budget_chars=100000, session_budget_chars=3000)
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "task"}]
+    model._query(msgs)
+    msgs += [{"role": "assistant", "content": "a1"}, {"role": "user", "content": "obs1"}]
+    model._query(msgs)
+    msgs += [{"role": "assistant", "content": "a2"}, {"role": "user", "content": "obs2"}]
+    model._query(msgs)  # resume fails -> new session from the full view
+    msgs += [{"role": "assistant", "content": "a3"}, {"role": "user", "content": "x" * 4000}]
+    model._query(msgs)  # over the session budget -> new session
+    kinds = [k for k, _ in sent]
+    assert kinds == ["new", "resume", "resume", "new", "new"]
+    assert sent[1][1] == ["obs1"] and sent[3][1][0] == "s" and len(sent[4][1]) == len(msgs)
+
+
+def test_continued_step_forks_the_parent_session_on_the_same_backend():
+    from phase2 import claude_code
+    from phase2.cli_models import CliSession
+
+    calls = []
+
+    def run(argv, input=None, **kw):
+        calls.append((argv, input))
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "CHILD", input_tokens=2,
+                                           output_tokens=3, cost=0.0064), stderr="")
+
+    parent = {"id": "PARENT", "backend": "claude", "dir": "/tmp", "chars": 5000, "cost_total": 0.0002}
+    s = CliSession(parent)
+    _, u = claude_code.complete("claude/claude-sonnet-5-5", [{"role": "user", "content": "your new step"}],
+                                run=run, session=s)
+    argv = calls[0][0]
+    assert argv[argv.index("--resume") + 1] == "PARENT" and "--fork-session" in argv and calls[0][1] == "your new step"
+    assert s.id == "CHILD" and abs(u["claude_code_cost_usd"] - 0.0062) < 1e-9  # parent's cost not counted twice
+
+    dcalls = []
+
+    def drun(argv, cwd=None, **kw):
+        dcalls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=_session_line("ok", "DCHILD", factory_credits=50), stderr="")
+
+    ds = CliSession({"id": "DPARENT", "backend": "droid", "dir": "/tmp", "chars": 10})
+    droid.complete("droid/claude-haiku-5-5", [{"role": "user", "content": "x"}], run=drun, session=ds)
+    assert dcalls[0][dcalls[0].index("--fork") + 1] == "DPARENT" and "-s" not in dcalls[0]
+
+
+def test_install_commands_take_turns_and_others_do_not_wait():
+    from phase2.worker import INSTALL_LOCK, bounded
+
+    assert INSTALL_LOCK in bounded("pip install numpy", 60) and "flock 9" in bounded("apt-get install -y jq", 60)
+    assert INSTALL_LOCK not in bounded("python3 train.py --install-dir x", 60) and INSTALL_LOCK not in bounded("ls", 60)
+
+
+def test_budget_stops_a_running_attempt_before_its_next_call():
+    from phase2 import cli_models
+
+    spent = {"over": ""}
+    calls = []
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, budget_fn=lambda: spent["over"],
+                                       complete_fn=lambda m, msgs: calls.append(1) or
+                                       ("x", {"prompt_tokens": 1, "completion_tokens": 1}))
+    model._query([{"role": "user", "content": "go"}])
+    spent["over"] = "spent 300,001 of 300,000 credits"
+    with pytest.raises(cli_models.BudgetExceeded, match="300,000"):
+        model._query([{"role": "user", "content": "go"}])
+    assert len(calls) == 1 and cli_models.BudgetExceeded in type(model).abort_exceptions
+
+
+def test_reviewer_sends_back_values_without_evidence(monkeypatch):
+    from phase2 import llm, worker
+    from phase2.planner import Output, Step
+
+    env = FakeEnvironment(lambda cmd: ("seed=0c6c49e8\n", 0) if "outputs.txt" in cmd else ("", 0))
+    cfg = load_config(reviewer_model="anthropic/claude-opus-5-5")
+    prompts = []
+    monkeypatch.setattr(llm, "chat", lambda cfg, led, model, msgs, on_call=None:
+                        prompts.append(msgs[0]["content"]) or
+                        '{"unsupported": [{"name": "seed", "why": "never printed; first label used"}]}')
+    step = Step(id="s2", goal="recover the seed", outputs=[Output(name="seed")])
+
+    async def main():
+        adapter = HarborEnvAdapter(env, asyncio.get_running_loop(), 30)
+        msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "t"},
+                {"role": "assistant", "content": "THOUGHT: guess\n```mswea_bash_command\nhead log\n```"},
+                {"role": "user", "content": "<output>0c6c49e8.cc</output>"}]
+        return await asyncio.to_thread(worker.review_values, cfg, Ledger({}), step, adapter, msgs)
+
+    problem = asyncio.run(main())
+    assert "no evidence" in problem and "seed (never printed" in problem
+    assert "seed=0c6c49e8" in prompts[0] and "head log" in prompts[0]
+
+
+def test_v36_session_restates_the_task_by_appending_without_restarting():
+    from phase2 import cli_models
+
+    sent = []
+
+    def fake(model, msgs, session=None):
+        sent.append(("resume" if session.id else "new", [m["content"] for m in msgs]))
+        session.id = session.id or "S1"
+        return "```mswea_bash_command\nls\n```", {"prompt_tokens": 1, "completion_tokens": 1}
+
+    model = cli_models.make_text_model("droid/glm-5.3-flash", lambda *a: None, complete_fn=fake,
+                                       context_budget_chars=100000, session_budget_chars=300000,
+                                       session_nudge_chars=1000)
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "THE TASK"}]
+    model._query(msgs)
+    for i in range(3):
+        msgs += [{"role": "assistant", "content": f"a{i}"}, {"role": "user", "content": "o" * 700}]
+        model._query(msgs)
+    kinds = [k for k, _ in sent]
+    assert kinds == ["new", "resume", "resume", "resume"]  # never restarted: the cache survives
+    nudges = [i for i, (_, c) in enumerate(sent) if any("restates your task" in x for x in c)]
+    assert nudges and all("THE TASK" in " ".join(sent[i][1]) for i in nudges) and len(nudges) < 3

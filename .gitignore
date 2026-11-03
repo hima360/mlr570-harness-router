@@ -6,4 +6,8 @@ runs/
 *.key
 __pycache__/
 .DS_Store
+.venv/
+jobs/
+.pytest_cache/
+demo/
 runner.log
