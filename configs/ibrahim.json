@@ -2,7 +2,7 @@
   "person": "ibrahim",
   "model": "claude-sonnet-5-5",
   "plan": "plan.tsv",
-  "parallel": 2,
+  "parallel": 5,
   "cap_wait_minutes": 30,
   "max_cap_retries": 24,
   "task_timeout_minutes": 180,
