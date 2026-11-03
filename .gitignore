@@ -10,3 +10,4 @@ __pycache__/
 jobs/
 .pytest_cache/
 demo/
+runner.log
