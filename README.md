@@ -75,9 +75,11 @@ Design: `docs/PHASE2_PLAN.md`.
   cost is likely higher (~$34 for ~9/36 if it matched v3.5 there; Unverified).
 - **v2.8** is kept on branch `phase2/v2.8` and tag `phase2-v2.8` (setup `takeover28`): most solves, 11/36 for
   $41.83 vs Opus alone 4/35 $31.31 on the full held-out.
-- Why v3.10 costs less: (1) it is measured on its cheapest 26 runs; (2) the kept prompt cache (v3.5, about 13%
-  cheaper); (3) the hopeless-takeover skip fired once. v2.8's extra cost is its long Opus takeovers, which are also
-  where its extra solves come from. Full log: `docs/OVERNIGHT_LOOP.md`; page: `reports/heldout-final.html`.
+- Why v3.10 costs less than v2.8 (same 26 trials, $16.74 vs $24.52): Opus works less, 207 takeover calls vs 333
+  (shorter takeovers, and 2 runs the judge shipped without one), and each call is cheaper because the session is
+  not restarted, so the prompt cache holds. The price is fewer rescues (hof r1: v2.8 solved in 10 calls, v3.10
+  stopped at 6). The 10 cut-off trials only matter against v3.10's full total and Opus alone.
+  Full log: `docs/OVERNIGHT_LOOP.md`; page: `reports/heldout-final.html`.
 
 Setup and checks:
 

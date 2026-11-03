@@ -175,3 +175,7 @@ Candidate improvements (from dt1/dv8 traces)
   branch phase2/v2.8 and tag phase2-v2.8. Why v3.10 costs less: (1) it is measured on its 26 cheapest trials (the 10
   cut off were its longest takeovers); (2) kept prompt cache from v3.5 (~13%); (3) the LimitsExceeded skip fired
   once in 26 runs. v2.8's extra cost is its long Opus takeovers, which are also where its extra solves come from.
+- 09:25 CORRECTION (Ibrahim): the cut-off bias does not explain v3.10 vs v2.8, which are paired on the same 26 trials
+  ($16.74 vs $24.52). The gap is Opus effort: 207 takeover calls vs 333 (shorter takeovers; production r1 and sglang
+  r1 shipped with no takeover), plus cheaper calls from the kept cache. Cost of it: fewer rescues (hof r1 solved by
+  v2.8 in 10 calls; v3.10 stopped at 6).
