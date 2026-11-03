@@ -160,3 +160,9 @@ Candidate improvements (from dt1/dv8 traces)
 - 08:05 HELD FOR LATER (Ibrahim): task ledger (/tmp/LEDGER.json: items with status, owner, proof command; judge
   re-runs each proof; takeover starts from open/broken items; done items' tool output pruned to stubs), then cross-task
   lessons. Test it off Droid: Opus via Claude Pro (claude-code backend) + GLM via Z.ai, new config, dev then held-out.
+- 08:53 Droid stopped at ~08:40 ("Authentication failed. Please log in", droid exec 08:53): subscription ended or
+  logged out. v3.10 finished 26/36 held-out trials; 10 were set aside as ProviderUnavailable (mp r2, sglang r2,
+  sound-change r2, biped r1/r2, hof r2, vllm r2, ctr r1/r2, vpp r2); supervisors wait for Droid. On the SAME 26
+  finished trials: v3.10 5/26 $16.74; v3.5 3/26 $18.67; v2.8 8/26 $24.52; Opus alone 3/26 $21.08. NOT a confirmed
+  win: the missing 10 are v3.10's longest (most takeover-heavy) runs, so its cost here is biased low (02:35 lesson);
+  3 of them are tasks v2.8/v3.5 solved. The goal stays open until the 10 finish.
