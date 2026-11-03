@@ -64,7 +64,22 @@ harnesses. Tell it explicitly not to edit `plan.tsv`, the prices or the log fiel
 
 ## Phase 2 harness (`phase2/`)
 
-Design: `docs/PHASE2_PLAN.md`. Setup and checks:
+Design: `docs/PHASE2_PLAN.md`.
+### Versions
+
+- **Main version: v3.10** (setup `main`, alias of `takeover310`, config `configs/phase2-droid-glm-takeover310.json`).
+  GLM-5.3 Flash builds; Opus 5.5 judges once and, on "fix", takes over in the same container; Opus's session is
+  kept whole (300k chars) so its prompt cache holds; no judge or takeover when the builder used its whole command
+  budget. Held-out (seeds 570-572), same 26 trials: v3.10 5/26 $16.74, Opus alone 3/26 $21.08, v2.8 8/26 $24.52.
+  The other 10 trials were cut off when the Droid subscription ended; they were v3.10's longest runs, so its full
+  cost is likely higher (~$34 for ~9/36 if it matched v3.5 there; Unverified).
+- **v2.8** is kept on branch `phase2/v2.8` and tag `phase2-v2.8` (setup `takeover28`): most solves, 11/36 for
+  $41.83 vs Opus alone 4/35 $31.31 on the full held-out.
+- Why v3.10 costs less: (1) it is measured on its cheapest 26 runs; (2) the kept prompt cache (v3.5, about 13%
+  cheaper); (3) the hopeless-takeover skip fired once. v2.8's extra cost is its long Opus takeovers, which are also
+  where its extra solves come from. Full log: `docs/OVERNIGHT_LOOP.md`; page: `reports/heldout-final.html`.
+
+Setup and checks:
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv -r requirements-phase2.txt

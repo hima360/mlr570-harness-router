@@ -171,3 +171,7 @@ Candidate improvements (from dt1/dv8 traces)
   v3.10 never finished, v3.5 got 4/10 $17.21, v2.8 3/10 $17.31, Opus 1/9 $10.23; if v3.10 behaved like v3.5 there,
   its full total would be ~9/36 ~$34 vs Opus 4/35 $31.31 (estimate, Unverified). Goal not confirmed. Page:
   reports/heldout-final.html (v3.10 column = 26 trials). Improvement loop stopped: no model access left to test with.
+- 09:15 DECISION (Ibrahim): v3.10 is the main version (setup `main` = takeover310; README "Versions"); v2.8 kept on
+  branch phase2/v2.8 and tag phase2-v2.8. Why v3.10 costs less: (1) it is measured on its 26 cheapest trials (the 10
+  cut off were its longest takeovers); (2) kept prompt cache from v3.5 (~13%); (3) the LimitsExceeded skip fired
+  once in 26 runs. v2.8's extra cost is its long Opus takeovers, which are also where its extra solves come from.

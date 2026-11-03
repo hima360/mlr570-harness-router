@@ -57,3 +57,6 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     # v3.10: v3.5 with no judge or takeover after a builder that used its whole command budget.
     "takeover310": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover310.json"),
 }
+
+# The main version (README "Versions"): v3.10.
+SETUPS["main"] = SETUPS["takeover310"]
