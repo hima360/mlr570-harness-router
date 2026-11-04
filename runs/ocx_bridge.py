@@ -6,9 +6,13 @@ host.docker.internal, so Codex inside a task gets "403 cross-origin data-plane r
 local bearer token (OCX_BRIDGE_TOKEN in the git-ignored .env, so a web page cannot use it through DNS rebinding),
 and forwards the request to opencodex with a loopback Host. Responses are streamed through unchanged.
 
+Paths under /effort-medium/ (ZCode, whose headless mode always asks for "max") have the prefix dropped and any
+reasoning_effort / reasoning.effort in the JSON body set to "medium", the effort every Phase 1 column runs at.
+
   set -a; . .env; set +a; nohup ../mlr570-harness-router/.venv/bin/python runs/ocx_bridge.py >> runs/ocx_bridge.log 2>&1 &
 """
 import hmac
+import json
 import os
 
 import aiohttp
@@ -28,7 +32,19 @@ async def forward(request: web.Request) -> web.StreamResponse:
     headers = {k: v for k, v in request.headers.items() if k.lower() not in DROP}
     headers["Host"] = "127.0.0.1:10100"
     body = await request.read()
-    async with request.app["session"].request(request.method, UPSTREAM + request.rel_url.raw_path_qs,
+    path = request.rel_url.raw_path_qs
+    if path.startswith("/effort-medium/"):
+        path = path[len("/effort-medium"):]
+        try:
+            doc = json.loads(body)
+            if "reasoning_effort" in doc:
+                doc["reasoning_effort"] = "medium"
+            if isinstance(doc.get("reasoning"), dict) and "effort" in doc["reasoning"]:
+                doc["reasoning"]["effort"] = "medium"
+            body = json.dumps(doc).encode()
+        except ValueError:
+            print(f"effort-medium: body not JSON ({request.headers.get('Content-Encoding', 'plain')})", flush=True)
+    async with request.app["session"].request(request.method, UPSTREAM + path,
                                               headers=headers, data=body or None) as up:
         resp = web.StreamResponse(status=up.status, headers={
             k: v for k, v in up.headers.items() if k.lower() not in DROP and k.lower() != "content-encoding"})

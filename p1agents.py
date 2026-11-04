@@ -8,7 +8,10 @@ would log as 0: they are filled from the session totals instead. Everything else
   PYTHONPATH=$PWD harbor run ... -a p1agents:HermesPinned --ak version=v2026.9.21 ...
 """
 import json
+import os
+from pathlib import Path
 
+from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.agents.installed.hermes import Hermes
 from harbor.models.agent.context import AgentContext
 from harbor.environments.base import BaseEnvironment
@@ -46,3 +49,78 @@ class HermesPinned(Hermes):
         context.n_input_tokens = (s.get("input_tokens") or 0) + read + write  # Harbor's n_input_tokens includes cache
         context.n_cache_tokens = read
         context.n_output_tokens = s.get("output_tokens") or 0
+
+
+ZCODE_BUNDLE = Path(__file__).parent / "runs" / "zcode-0.16.9"  # zcode.cjs + zcode-builtin.json from ZCode.app 0.16.9
+ZCODE_NODE = "v24.11.0"  # zcode.cjs needs node:sqlite (Node >= 22.13)
+
+
+class ZCode(BaseInstalledAgent):
+    """ZCode CLI (Z.ai) 0.16.9, bare: memory, skills and plugins off, a fresh home in every container.
+
+    The CLI is one JavaScript file from ZCode.app, run with Node inside the task container. It talks to the model
+    through the bridge's /effort-medium/ path, because headless ZCode always asks for reasoning effort "max" and every
+    Phase 1 column runs at medium. Tokens come from ZCode's own per-call model log (rollout/model-io-*.jsonl).
+
+      PYTHONPATH=$PWD harbor run ... -a p1agents:ZCode -m anthropic/claude-sonnet-5-5 ...
+    """
+
+    DEFAULT_SETUP_TIMEOUT_SEC = 900.0
+
+    @staticmethod
+    def name() -> str:
+        return "zcode"
+
+    def version(self) -> str | None:
+        return "0.16.9"
+
+    def get_version_command(self) -> str | None:
+        return "node /opt/zcode/zcode.cjs --version"
+
+    async def install(self, environment: BaseEnvironment) -> None:
+        await self.ensure_system_dependencies(environment, ("curl", "git", "ripgrep", "xz"))
+        await self.exec_as_root(environment, command=(
+            "set -e; mkdir -p /opt/zcode; "
+            "if ! node -e 'require(\"node:sqlite\")' 2>/dev/null; then "
+            "  a=$(uname -m); case $a in aarch64|arm64) a=arm64;; x86_64) a=x64;; esac; "
+            f"  curl -fsSL --retry 5 https://nodejs.org/dist/{ZCODE_NODE}/node-{ZCODE_NODE}-linux-$a.tar.xz "
+            f"  | tar -xJ -C /opt && ln -sf /opt/node-{ZCODE_NODE}-linux-$a/bin/node /usr/local/bin/node; fi; node --version"),
+            timeout_sec=600)
+        for f in ("zcode.cjs", "zcode-builtin.json"):
+            await environment.upload_file(ZCODE_BUNDLE / f, f"/opt/zcode/{f}")
+        await self.exec_as_root(environment, command="chmod -R a+rX /opt/zcode && node /opt/zcode/zcode.cjs --version")
+
+    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        provider, model = (self.model_name or "").split("/", 1)
+        config = {"provider": {"ocx": {"kind": "openai-compatible", "name": "opencodex", "options": {
+                      "apiKeyRequired": True, "baseURL": os.environ["OPENAI_BASE_URL"].rstrip("/").removesuffix("/v1")
+                      + "/effort-medium/v1", "apiKey": os.environ["OPENAI_API_KEY"]},
+                      "models": {f"{provider}/{model}": {"name": model}}}},
+                  "model": {"main": f"ocx/{provider}/{model}", "lite": f"ocx/{provider}/{model}"},
+                  "memory": {"use": False}, "skills": {"enabled": False, "includeInstructions": False},
+                  "plugins": {"enabled": False}}
+        env = {"HOME": "/tmp/zhome", "HARBOR_INSTRUCTION": instruction,
+               "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE": "/opt/zcode/zcode-builtin.json", "ZCODE_CONFIG": json.dumps(config)}
+        try:
+            await self.exec_as_agent(environment, env=env, command=(
+                'mkdir -p "$HOME/.zcode/cli" && printf %s "$ZCODE_CONFIG" > "$HOME/.zcode/cli/config.json" && '
+                'chmod 600 "$HOME/.zcode/cli/config.json" && unset ZCODE_CONFIG && '
+                'node /opt/zcode/zcode.cjs -p "$HARBOR_INSTRUCTION" --cwd "$PWD" --mode yolo 2>&1 '
+                "| stdbuf -oL tee /logs/agent/zcode.txt; exit ${PIPESTATUS[0]}"))
+        finally:
+            await self.exec_as_agent(environment, env={"HOME": "/tmp/zhome"}, timeout_sec=60, command=(
+                'cp "$HOME"/.zcode/cli/rollout/*.jsonl /logs/agent/ 2>/dev/null; '
+                'cp -r "$HOME"/.zcode/cli/log /logs/agent/zcode-log 2>/dev/null; true'))
+
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        n_in = n_cache = n_out = 0
+        for f in self.logs_dir.glob("model-io-*.jsonl"):
+            for line in f.read_text(errors="replace").splitlines():
+                try:
+                    u = (json.loads(line).get("response") or {}).get("usage") or {}
+                except ValueError:
+                    continue
+                n_in += u.get("inputTokens") or 0  # includes cached input, as Harbor's n_input_tokens does
+                n_cache += u.get("cacheReadTokens") or 0
+                n_out += u.get("outputTokens") or 0
+        context.n_input_tokens, context.n_cache_tokens, context.n_output_tokens = n_in, n_cache, n_out
