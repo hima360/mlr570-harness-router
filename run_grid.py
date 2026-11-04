@@ -20,7 +20,8 @@ from pathlib import Path
 # be 429, so a bare "rate limit" or "429" matched healthy runs and threw them away (2026-11-02).
 CAP_PATTERN = re.compile(
     r"usage limit reached|hit your (usage )?limit|limit reached\W*\|?\s*\d|\"status\"\s*:\s*\"rejected\"|"
-    r"quota exceeded|too many requests|try again (at|in) ",
+    r"quota exceeded|too many requests|try again (at|in) |"
+    r"rate-limited every one of \d+ attempts|usage limit resets in",  # Hermes 0.21.4 (2026-11-04: 4 runs logged as fails)
     re.IGNORECASE)
 
 # Logins for the harnesses (for example CLAUDE_CODE_OAUTH_TOKEN) live in a local, git-ignored .env.
