@@ -52,7 +52,8 @@ class HermesPinned(Hermes):
 
 
 ZCODE_BUNDLE = Path(__file__).parent / "runs" / "zcode-0.16.9"  # zcode.cjs + zcode-builtin.json from ZCode.app 0.16.9
-ZCODE_NODE = "v24.11.0"  # zcode.cjs needs node:sqlite (Node >= 22.13)
+ZCODE_NODE = "v24.11.0"  # zcode.cjs needs node:sqlite (Node >= 22.13); tarballs cached in ZCODE_BUNDLE
+ZCODE_BIN = "/opt/zcode/node/bin/node /opt/zcode/zcode.cjs"
 
 
 class ZCode(BaseInstalledAgent):
@@ -75,20 +76,22 @@ class ZCode(BaseInstalledAgent):
         return "0.16.9"
 
     def get_version_command(self) -> str | None:
-        return "node /opt/zcode/zcode.cjs --version"
+        return f"{ZCODE_BIN} --version"
 
     async def install(self, environment: BaseEnvironment) -> None:
+        # Our own Node, uploaded from the host and called by full path: a task's own `node` may be too old for
+        # node:sqlite or Bun's wrapper, and a download from nodejs.org failed in 2 of the first 8 trials.
         await self.ensure_system_dependencies(environment, ("curl", "git", "ripgrep", "xz"))
-        await self.exec_as_root(environment, command=(
-            "set -e; mkdir -p /opt/zcode; "
-            "if ! node -e 'require(\"node:sqlite\")' 2>/dev/null; then "
-            "  a=$(uname -m); case $a in aarch64|arm64) a=arm64;; x86_64) a=x64;; esac; "
-            f"  curl -fsSL --retry 5 https://nodejs.org/dist/{ZCODE_NODE}/node-{ZCODE_NODE}-linux-$a.tar.xz "
-            f"  | tar -xJ -C /opt && ln -sf /opt/node-{ZCODE_NODE}-linux-$a/bin/node /usr/local/bin/node; fi; node --version"),
-            timeout_sec=600)
-        for f in ("zcode.cjs", "zcode-builtin.json"):
+        r = await self.exec_as_root(environment, command="uname -m")
+        arch = "arm64" if (r.stdout or "").strip() in ("aarch64", "arm64") else "x64"
+        tar = f"node-{ZCODE_NODE}-linux-{arch}.tar.xz"
+        await self.exec_as_root(environment, command="mkdir -p /opt/zcode")
+        for f in ("zcode.cjs", "zcode-builtin.json", tar):
             await environment.upload_file(ZCODE_BUNDLE / f, f"/opt/zcode/{f}")
-        await self.exec_as_root(environment, command="chmod -R a+rX /opt/zcode && node /opt/zcode/zcode.cjs --version")
+        await self.exec_as_root(environment, timeout_sec=300, command=(
+            f"set -e; tar -xJf /opt/zcode/{tar} -C /opt/zcode && rm /opt/zcode/{tar} && "
+            f"ln -sfn /opt/zcode/node-{ZCODE_NODE}-linux-{arch} /opt/zcode/node && chmod -R a+rX /opt/zcode && "
+            f"{ZCODE_BIN} --version"))
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         provider, model = (self.model_name or "").split("/", 1)
@@ -105,7 +108,7 @@ class ZCode(BaseInstalledAgent):
             await self.exec_as_agent(environment, env=env, command=(
                 'mkdir -p "$HOME/.zcode/cli" && printf %s "$ZCODE_CONFIG" > "$HOME/.zcode/cli/config.json" && '
                 'chmod 600 "$HOME/.zcode/cli/config.json" && unset ZCODE_CONFIG && '
-                'node /opt/zcode/zcode.cjs -p "$HARBOR_INSTRUCTION" --cwd "$PWD" --mode yolo 2>&1 '
+                f'{ZCODE_BIN} -p "$HARBOR_INSTRUCTION" --cwd "$PWD" --mode yolo 2>&1 '
                 "| stdbuf -oL tee /logs/agent/zcode.txt; exit ${PIPESTATUS[0]}"))
         finally:
             await self.exec_as_agent(environment, env={"HOME": "/tmp/zhome"}, timeout_sec=60, command=(
