@@ -30,6 +30,18 @@ src=open('run_grid.py').read(); src=src[:src.index('with ThreadPoolExecutor')]
 exec(src)" 2>/dev/null | grep -oE '^[0-9]+ runs to do' | grep -oE '^[0-9]+')
     if [ "${left:-0}" -gt 0 ]; then
       log "runner not running, ${left} runs left -> starting it"
+      # A trial killed mid-run leaves its job folder; Harbor then returns at once with no result. Move such folders aside.
+      python3 - <<'PY' >> runner.log
+import json, os, shutil, time
+logged = {json.loads(l)["outdir"] for l in open("results/ibrahim.jsonl") if l.strip()}
+dest = f"runs/void-incomplete-{time.strftime('%H%M')}"
+for h in os.listdir("runs/ibrahim"):
+    for b in os.listdir(f"runs/ibrahim/{h}"):
+        for d in os.listdir(f"runs/ibrahim/{h}/{b}"):
+            p = f"runs/ibrahim/{h}/{b}/{d}"
+            if p not in logged:
+                os.makedirs(dest, exist_ok=True); shutil.move(p, f"{dest}/{h}-{d}"); print(f"[supervisor] moved unlogged {p} to {dest}")
+PY
       PATH=/Users/hima/Developer/mlr570-harness-router/.venv/bin:$PATH nohup caffeinate -i python3 run_grid.py configs/ibrahim.json >> runner.log 2>&1 &
     else
       log "all planned runs logged -> supervisor done"; exit 0
