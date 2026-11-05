@@ -6,11 +6,21 @@
 #   5-hour back under it      -> remove runs/PAUSE (the window has reset)
 #   runner not running        -> start it if planned runs are still missing (e.g. voided rows), else exit
 cd /Users/hima/Developer/mlr570-phase1
-WEEKLY_CAP=${WEEKLY_CAP:-85}
+WEEKLY_CAP=${WEEKLY_CAP:-95}  # Ibrahim 2026-11-05: raised from 85 so ZCode can finish on b***9
+ACCOUNT=${ACCOUNT:-de193e37f8d58c6376eb80482e10664b}  # b***9; opencodex fails over to the spent uni account on a 5h cap
+export PATH=/Users/hima/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH
 FIVE_H_PAUSE=${FIVE_H_PAUSE:-85}
 log() { echo "$(date '+%F %T') [supervisor] $*" >> runner.log; }
 q='import json,sys;q=json.load(sys.stdin)["reports"][0]["quota"];print(q["fiveHourPercent"],q["weeklyPercent"])'
 while true; do
+  # After a reboot nothing is running: bring up opencodex, the bridge and the disk guard first.
+  curl -s -o /dev/null -m 5 http://127.0.0.1:10100/v1/models || { ocx start >/dev/null 2>&1 & sleep 15; log "started opencodex"; }
+  pgrep -f ocx_bridge.py >/dev/null || { (set -a; . ./.env; set +a; nohup ../mlr570-harness-router/.venv/bin/python runs/ocx_bridge.py >> runs/ocx_bridge.log 2>&1 &); log "started bridge"; }
+  pgrep -f disk_guard.sh >/dev/null || { nohup runs/disk_guard.sh >/dev/null 2>&1 & log "started disk guard"; }
+  cur=$(ocx account current anthropic 2>/dev/null | awk 'NR==2{print $3}')
+  if [ -n "$cur" ] && [ "$cur" != "$ACCOUNT" ]; then
+    ocx account use anthropic "$ACCOUNT" >/dev/null 2>&1; log "active account was $cur -> switched back to $ACCOUNT"; sleep 5
+  fi
   read -r fh wk < <(ocx provider quota --refresh --json 2>/dev/null | python3 -c "$q" 2>/dev/null \
                     || ocx provider quota --json 2>/dev/null | python3 -c "$q" 2>/dev/null)
   if [ -z "$wk" ]; then sleep 180; continue; fi
