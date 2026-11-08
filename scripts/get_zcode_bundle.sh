@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds runs/zcode-0.16.9/, the files p1agents.ZCode uploads into each task container.
 # runs/ is git-ignored, so every teammate builds it once on their own Mac:
-#   - zcode.cjs + zcode-builtin.json are copied from the ZCode desktop app (they ship inside it);
+#   - zcode.cjs + zcode-builtin.json come from vendor/zcode-0.16.9/ in this repo;
 #   - the Node 24 tarballs come from nodejs.org (zcode.cjs needs node:sqlite, Node >= 22.13).
 # Every file is checked against the SHA-256 used for Ibrahim's runs, so all columns run the same bytes.
 set -euo pipefail
@@ -11,8 +11,10 @@ OUT=runs/zcode-0.16.9
 NODE=v24.11.0
 mkdir -p "$OUT"
 
-# Newer ZCode apps ship a different CLI. If yours fails the check, get these two files from Ibrahim, put them in
-# runs/zcode-0.16.9/ and rerun: files already there are kept, not overwritten.
+# The two ZCode 0.16.9 files are in vendor/ (private repo); the app is only a fallback, since newer apps ship a different CLI.
+for f in zcode.cjs zcode-builtin.json; do
+  [ -f "$OUT/$f" ] || cp "vendor/zcode-0.16.9/$f" "$OUT/$f" 2>/dev/null || true
+done
 [ -f "$OUT/zcode.cjs" ] || cp "$APP/Contents/Resources/glm/zcode.cjs" "$OUT/zcode.cjs"
 [ -f "$OUT/zcode-builtin.json" ] || cp "$APP/Contents/Resources/config/provider/zcode-builtin.json" "$OUT/zcode-builtin.json"
 for arch in arm64 x64; do

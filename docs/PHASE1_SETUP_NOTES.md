@@ -64,9 +64,10 @@ After the first trials, confirm in `ocx observe logs --limit 50 --json` that `re
 scripts/get_zcode_bundle.sh
 ```
 
-It copies `zcode.cjs` and `zcode-builtin.json` from the ZCode desktop app (install it first; the app
-still ships CLI 0.16.9) and downloads the Node 24.11.0 tarballs from nodejs.org, then checks every file
-against the SHA-256 we ran with. If a check fails, your app has a newer CLI (3.17.2 does): get `zcode.cjs` and `zcode-builtin.json` from Ibrahim, put them in `runs/zcode-0.16.9/` and run the script again; it keeps files already there.
+It copies `zcode.cjs` and `zcode-builtin.json` (ZCode CLI 0.16.9) from `vendor/zcode-0.16.9/` in this repo,
+downloads the Node 24.11.0 tarballs from nodejs.org, and checks every file against the SHA-256 we ran
+with. No ZCode app is needed. Newer ZCode apps (3.17.2, for example) ship a different CLI, so do not
+copy the files from your app.
 
 ## 5. How rows in `results/ibrahim.jsonl` were handled
 
