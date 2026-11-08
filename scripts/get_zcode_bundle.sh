@@ -11,8 +11,10 @@ OUT=runs/zcode-0.16.9
 NODE=v24.11.0
 mkdir -p "$OUT"
 
-cp "$APP/Contents/Resources/glm/zcode.cjs" "$OUT/zcode.cjs"
-cp "$APP/Contents/Resources/config/provider/zcode-builtin.json" "$OUT/zcode-builtin.json"
+# Newer ZCode apps ship a different CLI. If yours fails the check, get these two files from Ibrahim, put them in
+# runs/zcode-0.16.9/ and rerun: files already there are kept, not overwritten.
+[ -f "$OUT/zcode.cjs" ] || cp "$APP/Contents/Resources/glm/zcode.cjs" "$OUT/zcode.cjs"
+[ -f "$OUT/zcode-builtin.json" ] || cp "$APP/Contents/Resources/config/provider/zcode-builtin.json" "$OUT/zcode-builtin.json"
 for arch in arm64 x64; do
   f="node-$NODE-linux-$arch.tar.xz"
   [ -f "$OUT/$f" ] || curl -fL --retry 3 -o "$OUT/$f" "https://nodejs.org/dist/$NODE/$f"

@@ -66,7 +66,7 @@ scripts/get_zcode_bundle.sh
 
 It copies `zcode.cjs` and `zcode-builtin.json` from the ZCode desktop app (install it first; the app
 still ships CLI 0.16.9) and downloads the Node 24.11.0 tarballs from nodejs.org, then checks every file
-against the SHA-256 we ran with. If a check fails, your app has a newer CLI: tell the group before running.
+against the SHA-256 we ran with. If a check fails, your app has a newer CLI (3.17.2 does): get `zcode.cjs` and `zcode-builtin.json` from Ibrahim, put them in `runs/zcode-0.16.9/` and run the script again; it keeps files already there.
 
 ## 5. How rows in `results/ibrahim.jsonl` were handled
 
