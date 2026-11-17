@@ -2,7 +2,7 @@
   "person": "ibrahim",
   "model": "claude-sonnet-5-5",
   "plan": "plan.tsv",
-  "parallel": 2,
+  "parallel": 5,
   "cap_wait_minutes": 30,
   "max_cap_retries": 24,
   "task_timeout_minutes": 180,
@@ -11,7 +11,10 @@
     "swe": "swebenchpro"
   },
   "harnesses": {
-    "claude-code": "harbor run -d {dataset} -i {task} -a claude-code -m {model} -n 1 -o {outdir} --job-name run"
+    "codex": "OPENAI_BASE_URL=http://host.docker.internal:10101/v1 OPENAI_API_KEY=\"$OCX_BRIDGE_TOKEN\" harbor run -d {dataset} -i {task} -a codex -m anthropic/{model} --ak reasoning_effort=medium --ak version=0.162.1 --ak 'config={{\"skills\":{{\"include_instructions\":false,\"bundled\":{{\"enabled\":false}}}},\"features\":{{\"memories\":false}}}}' -n 1 -o {outdir} --job-name run",
+    "hermes": "PYTHONPATH=$PWD OPENAI_BASE_URL=http://host.docker.internal:10101/v1 OPENAI_API_KEY=\"$OCX_BRIDGE_TOKEN\" harbor run -d {dataset} -i {task} -a p1agents:HermesPinned -m openai/anthropic/{model} --ak version=v2026.9.21 --ak toolsets=terminal,file,web,todo -n 1 -o {outdir} --job-name run",
+    "zcode": "PYTHONPATH=$PWD OPENAI_BASE_URL=http://host.docker.internal:10101/v1 OPENAI_API_KEY=\"$OCX_BRIDGE_TOKEN\" harbor run -d {dataset} -i {task} -a p1agents:ZCode -m anthropic/{model} -n 1 -o {outdir} --job-name run",
+    "claude-code": "harbor run -d {dataset} -i {task} -a claude-code -m {model} --ak version=2.1.316 -n 1 -o {outdir} --job-name run"
   },
   "prices_per_million": {
     "claude-sonnet-5-5": {
@@ -33,5 +36,6 @@
   "task_prefix": {
     "tb4": "terminal-bench/",
     "swe": ""
-  }
+  },
+  "harnesses_paused": {}
 }
