@@ -18,6 +18,11 @@ before working around it.
    `.gitignore` covers the usual names; check `git status` before every push anyway.
 6. **Your log only.** Write only to `results/<your-name>.jsonl`. Append, never rewrite.
    Never edit someone else's file.
+   Exception (agreed 2026-11-17, PR "GLM cached price"): `cost_usd` may be rewritten when the price table
+   itself was wrong, only by `scripts/recompute_cost.py`, only that field, by the file's owner, and the price
+   fix and the rewrite land in the same approved PR. Token counts, `passed` and every other field stay as logged.
+   Applied once: GLM-5.3 Flash cached tokens were priced at $0 instead of the $0.03/M list price
+   (https://docs.z.ai/guides/overview/pricing).
 7. **Failures are data.** Keep failed and timed-out runs in the log. The only rows you may delete
    are `passed: null` rows caused by a parsing bug, and only after fixing `parse_result()`, so they rerun.
 8. **Code changes go through PRs.** Fixes to `run_grid.py` or `make_plan.py` go on a branch with
