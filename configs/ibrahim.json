@@ -30,7 +30,7 @@
     "glm-5.3-flash": {
       "input_tokens": 0.15,
       "output_tokens": 0.5,
-      "cached_tokens": 0.0
+      "cached_tokens": 0.03
     }
   },
   "task_prefix": {
