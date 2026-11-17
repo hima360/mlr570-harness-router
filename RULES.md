@@ -29,7 +29,9 @@ before working around it.
    That covers a full disk, a dropped network, a machine restart, an opencodex stall or error, and a
    subscription usage cap. Move its row to `runs/void-<reason>/voided_rows.jsonl` and its folder into
    the same directory (keep both, never delete), rerun it, and post the task and reason in the group.
-   Wrong answers, timeouts and agent crashes are not setup failures: they stay in the log.
+   A run that hit a time limit (the runner's 180-minute limit or a Harbor agent timeout) may be set aside
+   and rerun the same way, with the same limits (agreed 2026-11-17). Wrong answers and agent crashes are not
+   setup failures: they stay in the log.
 8. **Code changes go through PRs.** Fixes to `run_grid.py` or `make_plan.py` go on a branch with
    a short description; anyone can review. Pull before you start a batch.
 9. **Push every night.** Commit and push your log daily, then post your run count in the group.
