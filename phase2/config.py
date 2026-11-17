@@ -15,12 +15,12 @@ DEFAULT_TIERS = [
     "anthropic/claude-opus-5-5",
 ]
 
-# USD per million tokens. Opus 5.5 is a placeholder: check the provider pricing page.
+# USD per million tokens, list prices (Anthropic and Z.ai pricing pages, checked 2026-11-17); same as list_prices.py.
 DEFAULT_PRICES = {
-    "zai/glm-5.3-flash": {"input": 0.15, "cached": 0.0, "output": 0.50},
+    "zai/glm-5.3-flash": {"input": 0.15, "cached": 0.03, "output": 0.50},
     "gpt-6.1-sol": {"input": 2.0, "cached": 0.0, "output": 10.0},
     "anthropic/claude-sonnet-5-5": {"input": 2.0, "cached": 0.10, "output": 10.0},
-    "anthropic/claude-opus-5-5": {"input": 5.0, "cached": 0.50, "output": 25.0},
+    "anthropic/claude-opus-5-5": {"input": 4.0, "cached": 0.20, "output": 20.0},
 }
 
 

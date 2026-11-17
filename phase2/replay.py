@@ -2,7 +2,6 @@
 
 For every task, Phase 1 says whether each model solved it and at what cost (in one reference
 harness, run 1). A routing policy picks one model per task; replay reads off pass and cost.
-Cost is recomputed from each row's tokens at the list prices in list_prices.py, not read from cost_usd.
 
   python -m phase2.replay --harness codex --results results/ [--scores scores.json]
 
@@ -17,23 +16,6 @@ from collections import defaultdict
 from pathlib import Path
 
 from .config import load_config
-from .list_prices import call_usd
-
-TOKEN_FIELDS = ("input_tokens", "cached_tokens", "output_tokens")
-
-
-def row_cost(r: dict) -> float:
-    """List-price cost of one Phase 1 row, recomputed from its token counts with list_prices.py.
-
-    The logged cost_usd used the Phase 1 config table, which priced some cached tokens at $0
-    (GLM-5.3 Flash is $0.03/M), so it is only used for rows without token counts or with an unpriced model.
-    Phase 1 input_tokens is the uncached part; call_usd wants all input, cached included."""
-    if any(r.get(k) is not None for k in TOKEN_FIELDS):
-        cached = r.get("cached_tokens") or 0
-        c = call_usd(r.get("model", ""), (r.get("input_tokens") or 0) + cached, cached, r.get("output_tokens") or 0)
-        if c is not None:
-            return c
-    return float(r.get("cost_usd") or 0.0)
 
 
 def load_grid(results_dir: Path, harness: str, run: int = 1) -> dict:
@@ -45,7 +27,7 @@ def load_grid(results_dir: Path, harness: str, run: int = 1) -> dict:
                 continue
             r = json.loads(line)
             if r.get("harness") == harness and r.get("run") == run and r.get("passed") is not None:
-                grid[r["task"]][r["model"]] = (bool(r["passed"]), row_cost(r))
+                grid[r["task"]][r["model"]] = (bool(r["passed"]), float(r.get("cost_usd") or 0.0))
     return dict(grid)
 
 
