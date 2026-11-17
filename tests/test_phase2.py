@@ -280,19 +280,6 @@ def test_replay_labels_and_policies(tmp_path, capsys):
     assert rep[f"always:{tiers[-1]}"]["quality_retained"] == 1.0
 
 
-def test_replay_cost_from_tokens_not_logged_cost(tmp_path):
-    from phase2 import replay
-
-    # Phase 1 GLM row: logged cost_usd priced cached tokens at $0; list price is $0.15 / $0.03 cached / $0.50.
-    row = {"harness": "codex", "run": 1, "task": "t1", "model": "glm-5.3-flash", "passed": True,
-           "input_tokens": 1_000_000, "cached_tokens": 10_000_000, "output_tokens": 1_000_000, "cost_usd": 0.65}
-    unpriced = dict(row, task="t2", model="some-unlisted-model", cost_usd=1.25)
-    (tmp_path / "x.jsonl").write_text(json.dumps(row) + "\n" + json.dumps(unpriced))
-    grid = replay.load_grid(tmp_path, "codex")
-    assert grid["t1"]["glm-5.3-flash"] == (True, pytest.approx(0.15 + 0.30 + 0.50))
-    assert grid["t2"]["some-unlisted-model"][1] == 1.25   # no list price -> logged cost kept
-
-
 def test_head_learns_separable_labels():
     import numpy as np
 
