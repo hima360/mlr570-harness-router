@@ -56,6 +56,12 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "takeover38": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover38.json"),
     # v3.10: v3.5 with no judge or takeover after a builder that used its whole command budget.
     "takeover310": ("fixed:1", BASE, "configs/phase2-droid-glm-takeover310.json"),
+    # v4 era (2026-11-18): Droid is gone; the same policies through opencodex (phase2/ocx.py).
+    "ocxglm": ("fixed:1", BASE, "configs/phase2-ocx-base.json"),
+    "ocxopus": ("fixed:2", BASE, "configs/phase2-ocx-base.json"),
+    "ocx28": ("fixed:1", BASE, "configs/phase2-ocx-takeover28.json"),
+    # v4: v2.8 + verified done (builder's check script run before the judge), no-verdict = fix, tool probe.
+    "ocxv4": ("fixed:1", BASE, "configs/phase2-ocx-v4.json"),
 }
 
 # The main version (README "Versions"): v3.10.

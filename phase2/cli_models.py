@@ -17,7 +17,7 @@ PROMPT_HEADER = ("You are acting as a plain language model inside another progra
 
 
 def backend_of(model: str) -> str:
-    return model.split("/", 1)[0] if model.startswith(("droid/", "claude/")) else ""
+    return model.split("/", 1)[0] if model.startswith(("droid/", "claude/", "ocx/")) else ""
 
 
 def delta_text(messages: list[dict]) -> str:
@@ -223,10 +223,12 @@ def openai_usage(u: dict, **extra) -> dict:
 def complete_fn_for(model: str, cfg=None):
     """The CLI backend's complete(model, messages) for this model id, or None for opencodex models.
     With a config, the model's pinned reasoning effort is bound in."""
-    from . import claude_code, droid
+    from . import claude_code, droid, ocx
 
     if droid.is_droid(model):
         fn = droid.complete
+    elif ocx.is_ocx(model):
+        fn = ocx.complete
     elif claude_code.is_claude_code(model):
         fn = claude_code.complete
     else:

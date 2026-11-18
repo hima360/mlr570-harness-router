@@ -176,6 +176,17 @@ class HarnessConfig:
     # v3.10: builder exits that end the run without a judge or takeover (e.g. LimitsExceeded: the builder used its
     # whole command budget; those takeovers solved 0/4 on dev and 0/4 on held-out). Empty = off.
     takeover_skip_exits: list[str] = field(default_factory=list)
+    # v4 A1 (verified done): the builder leaves a check script, one check per requirement (CHECKS_NOTE); the harness
+    # runs it before the judge, and the judge decides from the task next to the script and its output. Dev
+    # 2026-11-18: v2.8's judge shipped 1-2 of 12 runs, handing 21 of 24 to the Opus takeover. Off = v2.8.
+    verified_done: bool = False
+    checks_timeout_sec: int = 600
+    # v4: a judge that runs out of turns without a verdict says "fix" (was "ship": phase2/review.py, red team
+    # 2026-11-18). Off = v2.8 behaviour.
+    judge_out_of_turns_fix: bool = False
+    # v4 B1: list which common tools exist in the container at the start (7% of failed dev commands were
+    # "command not found"). Off = v2.8.
+    tool_probe: bool = False
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180

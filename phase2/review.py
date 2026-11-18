@@ -178,8 +178,27 @@ def problems_text(probs: list[dict], reviewer: str) -> str:
     return "\n".join(lines)
 
 
+CHECKS_NOTE = """
+
+BEFORE YOU SUBMIT: write a check script at {path} that tests every requirement the task states, one check per
+requirement (behaviours, edge cases, exact formats and paths, limits). Each check prints "PASS <requirement>" or
+"FAIL <requirement>: <why>"; the script exits 0 only if every check passes. Check the way the task's own tests
+will: from a fresh shell, through the real entry point, with the inputs and failure cases the task names. Run it
+and fix what fails before you submit. A reviewer reads the task next to your script and its output."""
+
+CHECKS_SECTION = """
+
+THE HARNESS RAN THE COLLEAGUE'S CHECK SCRIPT ({path}) just now. Script, then its output and exit code:
+{checks}
+
+First map each requirement the task states to a check in that script. A requirement with no check, a check that
+does not test what the task asks (wrong path, format, input or entry point), or a failing check is a problem. If
+every requirement has a matching check, all of them pass, and nothing in the work contradicts them, reply "ship"."""
+
+
 def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=None, max_explore: int = 0,
-                  transcript: list | None = None, evidence: bool = False, focus: str = ""):
+                  transcript: list | None = None, evidence: bool = False, focus: str = "", checks: str = "",
+                  checks_path: str = "", out_of_turns: str = "ship"):
     """`ask(messages) -> reply` is the reviewer model; `explore(command) -> output` runs a read-only command.
     Returns (verdict, problems, n_explored); `transcript`, when given, receives the review conversation so the
     second look (senior_verify) can continue it."""
@@ -192,12 +211,17 @@ def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=N
         prompt = prompt.replace("\nThen reply with only JSON", EVIDENCE_RULE + "\nThen reply with only JSON", 1)
     if focus:  # v2.7: what matters most for this kind of work (phase2.strategy.REVIEW_FOCUS)
         prompt = prompt.replace("\nThen reply with only JSON", f"\nFor this kind of work: {focus}\nThen reply with only JSON", 1)
+    if checks:  # v4 A1: decide from the check script and its output, not from reading alone
+        prompt = prompt.replace("\nThen reply with only JSON",
+                                CHECKS_SECTION.format(path=checks_path, checks=checks) + "\nThen reply with only JSON", 1)
     messages, n = [{"role": "user", "content": prompt}], 0
     for _ in range(max_explore + 2):
         reply = ask(messages)
         cmd = _explore_request(reply)
         if cmd is None:
             verdict, probs = parse_review(reply)
+            if out_of_turns == "fix" and '"verdict"' not in (reply or ""):  # v4: an unreadable review is not a pass
+                verdict, probs = "fix", [{"what": "the review had no readable verdict", "evidence": "", "fix": ""}]
             if transcript is not None:
                 transcript[:] = [*messages, {"role": "assistant", "content": reply}]
             return verdict, probs, n
@@ -207,4 +231,6 @@ def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=N
         else:
             messages += [{"role": "assistant", "content": reply},
                          {"role": "user", "content": "No more commands: reply with the review JSON now."}]
+    if out_of_turns == "fix":  # v4: no verdict is not a pass
+        return "fix", [{"what": "the reviewer ran out of turns before a verdict", "evidence": "", "fix": ""}], n
     return "ship", [], n

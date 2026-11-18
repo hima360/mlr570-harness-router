@@ -380,7 +380,7 @@ def worker_lines(messages: list[dict], max_obs: int = 1500) -> list[Text]:
 
 PRETTY = {"gpt": "GPT", "glm": "GLM", "deepseek": "DeepSeek", "kimi": "Kimi", "claude": "Claude",
           "sol": "Sol", "flash": "Flash", "haiku": "Haiku", "sonnet": "Sonnet", "opus": "Opus"}
-BACKEND = {"droid": "via Droid", "claude": "via Claude Code"}
+BACKEND = {"droid": "via Droid", "claude": "via Claude Code", "ocx": "via opencodex"}
 SUBMIT_MARK = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 OBS_RE = re.compile(r"<returncode>(-?\d+)</returncode>\s*(?:<output>\s*(.*?)\s*(?:</output>|$))?", re.S)
 
@@ -389,6 +389,8 @@ def pretty_model(model_id: str) -> str:
     """droid/deepseek-v4.1-flash -> 'DeepSeek V4.1 Flash (via Droid)'."""
     backend, _, name = model_id.partition("/") if "/" in model_id else ("", "", model_id)
     name = name.removeprefix("claude-") if backend == "claude" else name
+    if backend == "ocx":  # ocx/<provider>/<model>
+        name = name.split("/")[-1].removeprefix("claude-")
     words = []
     for w in re.split(r"[-_]", name):
         if re.fullmatch(r"v?\d+(\.\d+)*", w):
