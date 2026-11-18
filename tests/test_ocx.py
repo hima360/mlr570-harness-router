@@ -65,3 +65,17 @@ def test_does_not_retry_real_errors():
         raise ValueError("invalid model id")
     with pytest.raises(ValueError):
         ocx.complete("ocx/m", [{"role": "user", "content": "x"}], call=bad, sleep=lambda s: None)
+
+
+def test_streamed_reply_is_assembled_with_usage():
+    from types import SimpleNamespace as N
+    chunks = [N(choices=[N(delta=N(content="hel"))], usage=None), N(choices=[N(delta=N(content="lo"))], usage=None),
+              N(choices=[], usage={"prompt_tokens": 9, "completion_tokens": 2,
+                                   "prompt_tokens_details": {"cached_tokens": 4}})]
+    seen = []
+
+    def call(model, messages, **kw):
+        seen.append(kw)
+        return iter(chunks)
+    text, usage = ocx.complete("ocx/m", [{"role": "user", "content": "x"}], call=call)
+    assert text == "hello" and usage["prompt_tokens_details"]["cached_tokens"] == 4 and seen[0]["stream"] is True

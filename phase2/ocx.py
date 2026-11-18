@@ -48,6 +48,22 @@ def _usage(u) -> dict:
             "prompt_tokens_details": {"cached_tokens": int(cached)}}
 
 
+def _collect(resp) -> tuple[str, object]:
+    """Text and usage from a streamed reply (2026-11-18: long non-streamed GLM replies hit opencodex's 200 s
+    no-output limit and came back as 502; Droid streamed). A plain response object is accepted too (tests)."""
+    if getattr(resp, "choices", None) and getattr(resp.choices[0], "message", None) is not None:
+        return resp.choices[0].message.content or "", getattr(resp, "usage", None)
+    parts, usage = [], None
+    for ch in resp:
+        if getattr(ch, "choices", None):
+            delta = getattr(ch.choices[0], "delta", None)
+            if delta is not None and getattr(delta, "content", None):
+                parts.append(delta.content)
+        if getattr(ch, "usage", None):
+            usage = ch.usage
+    return "".join(parts), usage
+
+
 def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600, session=None,
              max_output_tokens: int = 0, call=None, sleep=time.sleep) -> tuple[str, dict]:
     """Returns (reply text, OpenAI-style usage). `call` is injectable for tests (same signature as
@@ -71,15 +87,16 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
         try:
             resp = call(model=f"openai/{model_id}", messages=history, timeout=timeout,
                         api_base=os.environ.get("PHASE2_OCX_BASE", DEFAULT_BASE),
-                        api_key=os.environ.get("PHASE2_OCX_KEY", "local"), **kwargs)
+                        api_key=os.environ.get("PHASE2_OCX_KEY", "local"), stream=True,
+                        stream_options={"include_usage": True}, **kwargs)
+            text, usage = _collect(resp)
             break
         except Exception as e:
             if wait is None or not transient(e):
                 raise
             sleep(wait)
-    text = resp.choices[0].message.content or ""
     if session is not None:
         if not session.id:
             session.id = uuid.uuid4().hex
         _HISTORIES[session.id] = history + [{"role": "assistant", "content": text}]
-    return text, _usage(getattr(resp, "usage", None) or {})
+    return text, _usage(usage or {})
