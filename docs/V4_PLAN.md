@@ -66,7 +66,7 @@ without losing rescues**. That is the target of A1 and A5.
 | # | Change | Why it generalises | Keep rule (dev, vs new-backend v2.8, two passes) |
 |---|---|---|---|
 | A1 | **Verified done.** Before the verdict the harness runs the task's own checks if it has any, plus tests the builder wrote, and the judge must map each test to a spec item. The judge sees spec + test output and decides in one call. Green, spec-mapped checks let it ship; the takeover is no longer the default. Fix the bug where the judge says "ship" when it runs out of turns (`phase2/review.py:210`); it becomes "fix", logged. | "Done means the checks pass" holds for any task with a spec. | Takeovers down at least 25%, solves within 1, at most 1 extra wrong ship. Log ship rate and ship precision per run. |
-| A5 | **The router (course question).** A small local model reads the task plus GLM's first few turns and decides: keep GLM, or escalate early to Opus. Early turns predict difficulty far better than the task text (published: 0.78 vs 0.63 routing score; text-only routers near chance). Trained on Phase 1 and dev logs only. | Uses behaviour signals, not task names; the same router runs on any benchmark. Generality is checked in section 4. | Offline first on logged runs (no quota): must beat "always hand over" on cost at equal solves before any paid run. |
+| ~~A5~~ | **Early-escalation router: dropped after the offline test** (2026-11-18, `research_notes/Open agent harnesses for v4/router_offline.md`). On 42 dev v2.8-family runs, leave-one-task-out: always-cascade 20 solves $38.02; best learned router (cascade or stop, logistic on GLM's first 10 commands) 18 solves $22.10. Every router that saves money loses solves. Its best feature (characters per GLM command, AUC 0.68) fingerprints tasks rather than predicting outcomes; task text is at chance (AUC 0.46-0.5). Reported as a negative result: for this design the cascade itself is the router. | | |
 | ~~A3~~ | **Cheap fix round: dropped.** Full GLM-5.3 costs ~9x Flash per token ($1.40/$4.40 vs $0.15/$0.50), lost as a takeover (v3.0: 1/7 vs 4/7), and in-loop revise rescued 1 of 19 runs. Not worth Ammar's quota. | | |
 | A2 | **Warm handoff (test first).** The takeover gets a fixed-shape fact sheet: files changed, check output, open spec items, not GLM's claims. | Any handoff loses state. | Median commands before the takeover's first edit falls from 3 to 1 or less. Red team: v3.1's handoff went 2/7 vs 4/7, so low odds. |
 | ~~A4~~ | **Multi-step planning: dropped from v4.** Lost in v1 (3/37 vs 5/22 one-model); highest cost to retest, lowest prior. Reported as a finding. | | |
@@ -139,7 +139,7 @@ uses, MIT) with Vercel AI Elements for plan, task and token panels (Apache-2.0).
 |---|---|---|
 | 1 | Backend port, preflight, quota guard, review.py bug, B1/B4/B6; app server + replay view | None |
 | 2 | A0 baseline: 3 arms x 12 dev tasks x 2 | Est. 10-15% weekly (Unverified) |
-| 3 | A1 built and tested (2 passes); A5 router trained and scored offline | Est. 5-10% |
+| 3 | A1 built and tested (2 passes); A5 scored offline (dropped) | Est. 5-10% |
 | 4 | A2 probe if A1 lands | Est. 5% |
 | 5 | Freeze; held-out draw (method decided beforehand); 4 arms; generality check | Largest; stop at 80% |
 | 6 | Live chat view, polish, write-up | None |
