@@ -8,11 +8,22 @@ this module re-sends the whole history, which the provider serves from cache, so
 as `droid exec -s`.
 """
 import os
+import time
 import uuid
 
 PREFIX = "ocx/"
 DEFAULT_BASE = "http://127.0.0.1:10100/v1"
 _HISTORIES: dict[str, list[dict]] = {}  # session id -> full message history (for resume and fork)
+# Z.ai answers bursts with "429 Rate limit reached for requests" (2026-11-18: 4 parallel runs, GLM builders died on
+# their first calls and Opus did the whole task). Droid retried for us; here we back off and retry transient errors.
+RETRY_WAITS = (5, 10, 20, 40, 60, 60, 90)
+TRANSIENT = ("429", "rate limit", "ratelimit", "overloaded", "529", "502", "503", "504", "timeout", "timed out",
+             "connection reset", "connection error", "temporarily unavailable")
+
+
+def transient(err: Exception) -> bool:
+    text = f"{type(err).__name__} {err}".lower()
+    return any(k in text for k in TRANSIENT)
 
 
 def is_ocx(model: str) -> bool:
@@ -38,7 +49,7 @@ def _usage(u) -> dict:
 
 
 def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600, session=None,
-             max_output_tokens: int = 0, call=None) -> tuple[str, dict]:
+             max_output_tokens: int = 0, call=None, sleep=time.sleep) -> tuple[str, dict]:
     """Returns (reply text, OpenAI-style usage). `call` is injectable for tests (same signature as
     litellm.completion). With a `CliSession`, `messages` are only the turns the session has not seen."""
     model_id = model[len(PREFIX):] if is_ocx(model) else model
@@ -56,9 +67,16 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
     kwargs = {"reasoning_effort": effort} if effort else {}
     if max_output_tokens:
         kwargs["max_tokens"] = max_output_tokens
-    resp = call(model=f"openai/{model_id}", messages=history, timeout=timeout,
-                api_base=os.environ.get("PHASE2_OCX_BASE", DEFAULT_BASE),
-                api_key=os.environ.get("PHASE2_OCX_KEY", "local"), **kwargs)
+    for i, wait in enumerate((*RETRY_WAITS, None)):
+        try:
+            resp = call(model=f"openai/{model_id}", messages=history, timeout=timeout,
+                        api_base=os.environ.get("PHASE2_OCX_BASE", DEFAULT_BASE),
+                        api_key=os.environ.get("PHASE2_OCX_KEY", "local"), **kwargs)
+            break
+        except Exception as e:
+            if wait is None or not transient(e):
+                raise
+            sleep(wait)
     text = resp.choices[0].message.content or ""
     if session is not None:
         if not session.id:
