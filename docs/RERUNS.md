@@ -15,12 +15,14 @@ Old rows: `runs/void-setup-ammar-1117/voided_rows.jsonl` on Ibrahim's machine.
 | vllm-deepseek-streaming | codex | 1 | null, 0 tokens | passed, 714 s | 3.11M | $0.1124 |
 | vpp-loss-divergence | hermes | 1 | null, 0 tokens | passed, 3116 s | 37.50M | $1.1848 |
 | interleaved-vigenere | hermes | 2 | null, 0 tokens | passed, 5162 s | 19.19M | $0.6365 |
-| vllm-deepseek-streaming | claude-code | 1 | null, 0 tokens | **pending** | | |
+| vllm-deepseek-streaming | claude-code | 1 | null, 0 tokens | failed (4 of 5 tests), 7560 s | 24.66M | $0.9895 |
 
-The claude-code row is not in `results/ammar.jsonl` until its rerun lands. Until then Ammar's column
-has 159 rows, not 160.
+The claude-code row was rerun on 2026-11-18 (off-peak, 15:24 to 17:30 Dubai, runner commit `70ab2aa`).
+The agent finished on its own (no timeout, no exception) and its answer failed the verifier, so the row
+stays as a failure. Ammar's column is back to 160 rows.
 
-Z.ai quota used by the three runs: 5-hour window 1% to 14%, weekly 30% to 33%.
+Z.ai quota used: first three runs, 5-hour window 1% to 14% and weekly 30% to 33%; claude-code run,
+5-hour 1% to 7% and weekly 33% to 35%.
 
 Attempts that failed before reaching the model this session (0 tokens, also moved aside, not counted):
 the bridge on port 10101 was not running (3 rows), and the restarted proxy had Claude inbound off
