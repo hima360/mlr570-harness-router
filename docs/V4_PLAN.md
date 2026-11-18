@@ -149,3 +149,12 @@ uses, MIT) with Vercel AI Elements for plan, task and token panels (Apache-2.0).
 1. Approve the success bar and the held-out source (a, b or c in section 4) before any held-out run.
 2. Approve spending Ammar's GLM quota (stop at 80% weekly; A0 alone is about 10-15%).
 3. Whether the generality check (second benchmark) is in scope.
+
+## Dev-batch findings 2026-11-19 (v4d6, opencodex backend)
+- 32k per-call output cap: 16 GLM calls (~10%) hit it and every one returned an empty reply (all reasoning, no
+  action); react-lead-form r1's builder died of RepeatedFormatError after 3 of them. Next: drop the cap.
+- Hypothesis (unverified): GLM-5.x expects its earlier reasoning_content replayed in history (opencodex
+  `preserveReasoningContentModels`, "GLM interleaved thinking"); phase2/ocx.py keeps only visible text, so GLM
+  likely re-derives each turn. Test after v4d6: capture delta.reasoning_content and replay it, compare tokens/call.
+- Missing check scripts (heat-pump, kv-live, react, payments) all coincide with a builder that did not submit
+  (LimitsExceeded / TimeExceeded / RepeatedFormatError): the script is written at the end, no A1 bug.
