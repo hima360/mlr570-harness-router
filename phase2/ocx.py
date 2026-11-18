@@ -18,7 +18,7 @@ _HISTORIES: dict[str, list[dict]] = {}  # session id -> full message history (fo
 # their first calls and Opus did the whole task). Droid retried for us; here we back off and retry transient errors.
 RETRY_WAITS = (20, 40, 60, 90, 120, 120, 180)
 TRANSIENT = ("429", "rate limit", "ratelimit", "overloaded", "529", "502", "503", "504", "timeout", "timed out",
-             "connection reset", "connection error", "temporarily unavailable")
+             "connection reset", "connection error", "temporarily unavailable", "incomplete stream")
 
 
 def transient(err: Exception) -> bool:
@@ -48,20 +48,30 @@ def _usage(u) -> dict:
             "prompt_tokens_details": {"cached_tokens": int(cached)}}
 
 
+class IncompleteReply(Exception):
+    """The stream ended without text and without hitting the length limit (2026-11-19: opencodex logged Opus
+    streams as `incomplete / upstream_server_error` with HTTP 200; the empty text ended a takeover in
+    RepeatedFormatError). Retried like any transient provider error."""
+
+
 def _collect(resp) -> tuple[str, object]:
     """Text and usage from a streamed reply (2026-11-18: long non-streamed GLM replies hit opencodex's 200 s
     no-output limit and came back as 502; Droid streamed). A plain response object is accepted too (tests)."""
     if getattr(resp, "choices", None) and getattr(resp.choices[0], "message", None) is not None:
         return resp.choices[0].message.content or "", getattr(resp, "usage", None)
-    parts, usage = [], None
+    parts, usage, finish = [], None, None
     for ch in resp:
         if getattr(ch, "choices", None):
             delta = getattr(ch.choices[0], "delta", None)
             if delta is not None and getattr(delta, "content", None):
                 parts.append(delta.content)
+            finish = getattr(ch.choices[0], "finish_reason", None) or finish
         if getattr(ch, "usage", None):
             usage = ch.usage
-    return "".join(parts), usage
+    text = "".join(parts)
+    if not text.strip() and finish != "length":
+        raise IncompleteReply(f"incomplete stream: no text (finish_reason={finish})")
+    return text, usage
 
 
 def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600, session=None,

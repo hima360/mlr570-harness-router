@@ -57,6 +57,9 @@ def infra_reason(job_dir: Path) -> str:
                                                                              "litellm.APIConnectionError", "no model reply for"))
            for e in events):  # 2026-11-18: the builder died on a provider error and Opus did the task alone
         return "builder ended by a provider error (rate limit or connection)"
+    broken = [e for e in calls if not str(e.get("reply") or "").strip() and 0 < (e.get("output_tokens") or 0) < 31000]
+    if broken and any(e.get("exit_status") == "RepeatedFormatError" for e in events):  # 2026-11-19, phase2/ocx.py
+        return f"ended by {len(broken)} empty replies from broken provider streams"
     ar = r.get("agent_result")
     if isinstance(ar, dict) and "n_input_tokens" in ar and not (ar.get("n_input_tokens") or ar.get("n_output_tokens")):
         return "no model tokens (proxy, bridge or account down)"  # 2026-11-17: every call failed

@@ -79,3 +79,19 @@ def test_streamed_reply_is_assembled_with_usage():
         return iter(chunks)
     text, usage = ocx.complete("ocx/m", [{"role": "user", "content": "x"}], call=call)
     assert text == "hello" and usage["prompt_tokens_details"]["cached_tokens"] == 4 and seen[0]["stream"] is True
+
+
+def test_empty_incomplete_stream_is_retried_but_length_cut_is_not():
+    from types import SimpleNamespace as N
+    empty = [N(choices=[N(delta=N(content=None), finish_reason=None)], usage=None),
+             N(choices=[], usage={"prompt_tokens": 5, "completion_tokens": 2000})]
+    good = [N(choices=[N(delta=N(content="ok"), finish_reason="stop")], usage=None)]
+    replies = [empty, good]
+    waits = []
+    text, _ = ocx.complete("ocx/m", [{"role": "user", "content": "x"}], call=lambda **kw: iter(replies.pop(0)),
+                           sleep=waits.append)
+    assert text == "ok" and len(waits) == 1
+    cut = [N(choices=[N(delta=N(content=None), finish_reason="length")], usage=None)]
+    text, _ = ocx.complete("ocx/m", [{"role": "user", "content": "x"}], call=lambda **kw: iter(cut),
+                           sleep=lambda s: (_ for _ in ()).throw(AssertionError("retried a length cut")))
+    assert text == ""
