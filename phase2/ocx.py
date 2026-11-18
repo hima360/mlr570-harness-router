@@ -16,7 +16,7 @@ DEFAULT_BASE = "http://127.0.0.1:10100/v1"
 _HISTORIES: dict[str, list[dict]] = {}  # session id -> full message history (for resume and fork)
 # Z.ai answers bursts with "429 Rate limit reached for requests" (2026-11-18: 4 parallel runs, GLM builders died on
 # their first calls and Opus did the whole task). Droid retried for us; here we back off and retry transient errors.
-RETRY_WAITS = (5, 10, 20, 40, 60, 60, 90)
+RETRY_WAITS = (20, 40, 60, 90, 120, 120, 180)
 TRANSIENT = ("429", "rate limit", "ratelimit", "overloaded", "529", "502", "503", "504", "timeout", "timed out",
              "connection reset", "connection error", "temporarily unavailable")
 

@@ -55,7 +55,7 @@ def test_retries_rate_limits_then_succeeds():
             raise RuntimeError("Provider error 429: Rate limit reached for requests")
         return fake_call(seen)(model, messages, **kw)
     text, _ = ocx.complete("ocx/m", [{"role": "user", "content": "x"}], call=flaky, sleep=waits.append)
-    assert text == "reply1" and waits == [5, 10]
+    assert text == "reply1" and waits == [20, 40]
 
 
 def test_does_not_retry_real_errors():
