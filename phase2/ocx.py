@@ -18,7 +18,8 @@ _HISTORIES: dict[str, list[dict]] = {}  # session id -> full message history (fo
 # their first calls and Opus did the whole task). Droid retried for us; here we back off and retry transient errors.
 RETRY_WAITS = (20, 40, 60, 90, 120, 120, 180)
 TRANSIENT = ("429", "rate limit", "ratelimit", "overloaded", "529", "502", "503", "504", "timeout", "timed out",
-             "connection reset", "connection error", "temporarily unavailable", "incomplete stream")
+             "connection reset", "connection error", "temporarily unavailable", "incomplete stream",
+             "apiconnectionerror", "internal server error", "midstreamfallback", "server_error")
 
 
 def transient(err: Exception) -> bool:
