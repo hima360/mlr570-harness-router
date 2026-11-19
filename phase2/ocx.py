@@ -69,6 +69,8 @@ def _collect(resp) -> tuple[str, object]:
         if getattr(ch, "usage", None):
             usage = ch.usage
     text = "".join(parts)
+    if not text.strip() and finish == "content_filter":  # a refusal: retrying gets the same answer
+        raise RuntimeError("provider refused the request (finish_reason=content_filter)")
     if not text.strip() and finish != "length":
         raise IncompleteReply(f"incomplete stream: no text (finish_reason={finish})")
     return text, usage
