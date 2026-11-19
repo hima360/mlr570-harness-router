@@ -164,6 +164,9 @@ class HarnessConfig:
     context_budget_chars: int = 32000
     # claude/ workers: CLAUDE_CODE_MAX_OUTPUT_TOKENS per call (0 = CLI default). Droid has no such flag.
     max_output_tokens: int = 8000
+    # ocx/ models whose earlier reasoning is sent back each turn (opencodex Responses route). GLM-5.x expects it
+    # ("interleaved thinking"); without it the v4 builder re-derived the task every turn (docs/V4_STUDY.md). v4.1.
+    reasoning_replay_models: list = field(default_factory=list)
     # Submit gate: times per attempt a submit is sent back because the step's check failed (0 = off).
     submit_checks: int = 2
     # CLI workers keep one session per attempt and send only new turns, so the provider caches the prefix.

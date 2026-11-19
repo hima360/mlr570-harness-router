@@ -74,10 +74,77 @@ def _collect(resp) -> tuple[str, object]:
     return text, usage
 
 
+def _responses_body(model_id: str, history: list[dict], effort, max_output_tokens: int) -> dict:
+    """A Responses-route request. Assistant turns carry the reasoning item they came with, which opencodex
+    turns back into `reasoning_content` for models on its preserve list (GLM-5.x). System text goes in
+    `instructions`: the chat adapter drops developer messages for non-OpenAI upstreams."""
+    system = "\n\n".join(m["content"] for m in history if m["role"] == "system")
+    items = []
+    for m in history:
+        if m["role"] == "system":
+            continue
+        if m["role"] == "assistant" and m.get("reasoning"):
+            items.append(m["reasoning"])
+        items.append({"role": m["role"], "content": m["content"]})
+    body = {"model": model_id, "input": items, "stream": True, "store": False,
+            "reasoning": {"summary": "auto", **({"effort": effort} if effort else {})}}
+    if system:
+        body["instructions"] = system
+    if max_output_tokens:
+        body["max_output_tokens"] = max_output_tokens
+    return body
+
+
+def _responses_collect(lines) -> tuple[str, dict | None, dict]:
+    """(text, reasoning item, usage) from a Responses SSE stream; the final `response.completed` event holds
+    the whole output. A stream that ends without it is an incomplete reply."""
+    import json
+
+    final = None
+    for line in lines:
+        if line.startswith("data:"):
+            data = line[5:].strip()
+            if data and data != "[DONE]":
+                ev = json.loads(data)
+                if ev.get("type") in ("response.completed", "response.incomplete", "response.failed"):
+                    final = ev
+    resp = (final or {}).get("response") or {}
+    if not final or final.get("type") == "response.failed":
+        raise IncompleteReply(f"incomplete stream: {(resp.get('error') or {}).get('message', 'no completed event')}")
+    text, reasoning = "", None
+    for it in resp.get("output") or []:
+        if it.get("type") == "reasoning":
+            reasoning = {k: v for k, v in it.items() if k in ("type", "id", "summary", "content", "encrypted_content")}
+        elif it.get("type") == "message":
+            text += "".join(c.get("text", "") for c in it.get("content") or [] if c.get("type") == "output_text")
+    u = resp.get("usage") or {}
+    usage = {"prompt_tokens": u.get("input_tokens", 0), "completion_tokens": u.get("output_tokens", 0),
+             "prompt_tokens_details": {"cached_tokens": (u.get("input_tokens_details") or {}).get("cached_tokens", 0)}}
+    cut = final.get("type") == "response.incomplete"
+    if not text.strip() and not cut:
+        raise IncompleteReply("incomplete stream: no text")
+    return text, reasoning, usage
+
+
+def _responses_call(model_id, history, effort, timeout, max_output_tokens):
+    import httpx
+
+    base = os.environ.get("PHASE2_OCX_BASE", DEFAULT_BASE)
+    body = _responses_body(model_id, history, effort, max_output_tokens)
+    headers = {"Authorization": f"Bearer {os.environ.get('PHASE2_OCX_KEY', 'local')}"}
+    with httpx.stream("POST", f"{base}/responses", json=body, headers=headers, timeout=timeout) as r:
+        if r.status_code >= 400:
+            r.read()
+            raise RuntimeError(f"{r.status_code} {r.text[:300]}")
+        return _responses_collect(r.iter_lines())
+
+
 def complete(model: str, messages: list[dict], effort: str | None = None, timeout: int = 600, session=None,
-             max_output_tokens: int = 0, call=None, sleep=time.sleep) -> tuple[str, dict]:
+             max_output_tokens: int = 0, call=None, sleep=time.sleep, replay_reasoning: bool = False,
+             responses_call=None) -> tuple[str, dict]:
     """Returns (reply text, OpenAI-style usage). `call` is injectable for tests (same signature as
-    litellm.completion). With a `CliSession`, `messages` are only the turns the session has not seen."""
+    litellm.completion). With a `CliSession`, `messages` are only the turns the session has not seen.
+    `replay_reasoning` (v4.1) uses the Responses route and keeps each reply's reasoning in the history."""
     model_id = model[len(PREFIX):] if is_ocx(model) else model
     new = _plain(messages)
     if session is not None and session.id and session.id in _HISTORIES:
@@ -93,13 +160,19 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
     kwargs = {"reasoning_effort": effort} if effort else {}
     if max_output_tokens:
         kwargs["max_tokens"] = max_output_tokens
+    reasoning = None
     for i, wait in enumerate((*RETRY_WAITS, None)):
         try:
-            resp = call(model=f"openai/{model_id}", messages=history, timeout=timeout,
-                        api_base=os.environ.get("PHASE2_OCX_BASE", DEFAULT_BASE),
-                        api_key=os.environ.get("PHASE2_OCX_KEY", "local"), stream=True,
-                        stream_options={"include_usage": True}, **kwargs)
-            text, usage = _collect(resp)
+            if replay_reasoning:
+                text, reasoning, usage = (responses_call or _responses_call)(model_id, history, effort, timeout,
+                                                                             max_output_tokens)
+            else:
+                resp = call(model=f"openai/{model_id}", messages=[{"role": m["role"], "content": m["content"]}
+                                                                  for m in history], timeout=timeout,
+                            api_base=os.environ.get("PHASE2_OCX_BASE", DEFAULT_BASE),
+                            api_key=os.environ.get("PHASE2_OCX_KEY", "local"), stream=True,
+                            stream_options={"include_usage": True}, **kwargs)
+                text, usage = _collect(resp)
             break
         except Exception as e:
             if wait is None or not transient(e):
@@ -108,5 +181,8 @@ def complete(model: str, messages: list[dict], effort: str | None = None, timeou
     if session is not None:
         if not session.id:
             session.id = uuid.uuid4().hex
-        _HISTORIES[session.id] = history + [{"role": "assistant", "content": text}]
+        turn = {"role": "assistant", "content": text}
+        if reasoning:
+            turn["reasoning"] = reasoning
+        _HISTORIES[session.id] = history + [turn]
     return text, _usage(usage or {})

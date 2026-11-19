@@ -95,3 +95,46 @@ def test_empty_incomplete_stream_is_retried_but_length_cut_is_not():
     text, _ = ocx.complete("ocx/m", [{"role": "user", "content": "x"}], call=lambda **kw: iter(cut),
                            sleep=lambda s: (_ for _ in ()).throw(AssertionError("retried a length cut")))
     assert text == ""
+
+
+def test_reasoning_replay_keeps_reasoning_in_history_and_body():
+    import json
+    from phase2.cli_models import CliSession
+    seen = []
+
+    def rcall(model_id, history, effort, timeout, max_out):
+        seen.append(ocx._responses_body(model_id, history, effort, max_out))
+        return f"r{len(seen)}", {"type": "reasoning", "summary": [{"type": "summary_text", "text": "think"}]}, \
+            {"prompt_tokens": 1, "completion_tokens": 1, "prompt_tokens_details": {"cached_tokens": 0}}
+    s = CliSession()
+    ocx.complete("ocx/zai/glm", [{"role": "system", "content": "sys"}, {"role": "user", "content": "a"}],
+                 session=s, replay_reasoning=True, responses_call=rcall, effort="high")
+    ocx.complete("ocx/zai/glm", [{"role": "user", "content": "b"}], session=s, replay_reasoning=True,
+                 responses_call=rcall)
+    body = seen[1]
+    assert body["instructions"] == "sys" and body["reasoning"]["summary"] == "auto"
+    assert [i.get("type") or i["role"] for i in body["input"]] == ["user", "reasoning", "assistant", "user"]
+    assert "effort" in seen[0]["reasoning"] and json.dumps(body)
+
+
+def test_responses_collect_text_reasoning_usage_and_incomplete():
+    import json
+    import pytest
+    done = {"type": "response.completed", "response": {"output": [
+        {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "t"}]},
+        {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
+        "usage": {"input_tokens": 5, "output_tokens": 3, "input_tokens_details": {"cached_tokens": 2}}}}
+    text, r, u = ocx._responses_collect(["event: x", "data: " + json.dumps(done)])
+    assert text == "hi" and r["id"] == "rs_1" and u["prompt_tokens_details"]["cached_tokens"] == 2
+    with pytest.raises(ocx.IncompleteReply):
+        ocx._responses_collect(["data: {\"type\": \"response.created\"}"])
+    cut = {"type": "response.incomplete", "response": {"output": [], "usage": {}}}
+    assert ocx._responses_collect(["data: " + json.dumps(cut)])[0] == ""
+
+
+def test_complete_fn_for_binds_replay_only_for_listed_models():
+    from phase2.cli_models import complete_fn_for
+    from phase2.config import load_config
+    cfg = load_config(None, reasoning_replay_models=["ocx/zai/glm-5.3-flash"], max_output_tokens=0)
+    assert complete_fn_for("ocx/zai/glm-5.3-flash", cfg).keywords.get("replay_reasoning") is True
+    assert "replay_reasoning" not in complete_fn_for("ocx/anthropic/claude-opus-5-5", cfg).keywords

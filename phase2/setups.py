@@ -62,6 +62,8 @@ SETUPS = {  # name: (policy, caps[, config overriding --config])
     "ocx28": ("fixed:1", BASE, "configs/phase2-ocx-takeover28.json"),
     # v4: v2.8 + verified done (builder's check script run before the judge), no-verdict = fix, tool probe.
     "ocxv4": ("fixed:1", BASE, "configs/phase2-ocx-v4.json"),
+    # v4.1: v2.8 policy on opencodex with the v4 backend fixes, no output cap, GLM reasoning replayed (2026-11-19).
+    "ocxv41": ("fixed:1", BASE, "configs/phase2-ocx-v41.json"),
 }
 
 # The main version (README "Versions"): v3.10.
