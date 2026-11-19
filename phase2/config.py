@@ -167,6 +167,9 @@ class HarnessConfig:
     # ocx/ models whose earlier reasoning is sent back each turn (opencodex Responses route). GLM-5.x expects it
     # ("interleaved thinking"); without it the v4 builder re-derived the task every turn (docs/V4_STUDY.md). v4.1.
     reasoning_replay_models: list = field(default_factory=list)
+    # ocx/ models: per-model output cap per call, overriding max_output_tokens (0 or missing = that default).
+    # v4.1: the Opus judge looped to 64k tokens of invented tool calls when uncapped (2026-11-19).
+    max_output_tokens_by_model: dict = field(default_factory=dict)
     # Submit gate: times per attempt a submit is sent back because the step's check failed (0 = off).
     submit_checks: int = 2
     # CLI workers keep one session per attempt and send only new turns, so the provider caches the prefix.

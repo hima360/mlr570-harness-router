@@ -227,7 +227,9 @@ def senior_review(ask, task: str, report: str, digest: str, diff: str, explore=N
             return verdict, probs, n
         if explore and n < max_explore:
             n += 1
-            messages += [{"role": "assistant", "content": reply}, {"role": "user", "content": f"$ {cmd}\n{explore(cmd)}"}]
+            # keep only the request, not any tool calls or results the reviewer invented after it
+            messages += [{"role": "assistant", "content": json.dumps({"explore": cmd})},
+                         {"role": "user", "content": f"$ {cmd}\n{explore(cmd)}"}]
         else:
             messages += [{"role": "assistant", "content": reply},
                          {"role": "user", "content": "No more commands: reply with the review JSON now."}]

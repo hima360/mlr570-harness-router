@@ -235,7 +235,8 @@ def complete_fn_for(model: str, cfg=None):
         return None
     if cfg is None:
         return fn
-    extra = {"max_output_tokens": cfg.max_output_tokens} if fn in (claude_code.complete, ocx.complete) and cfg.max_output_tokens else {}
+    cap = (cfg.max_output_tokens_by_model or {}).get(model) or cfg.max_output_tokens
+    extra = {"max_output_tokens": cap} if fn in (claude_code.complete, ocx.complete) and cap else {}
     if fn is ocx.complete and model in (cfg.reasoning_replay_models or []):
         extra["replay_reasoning"] = True
     return functools.partial(fn, effort=(cfg.reasoning_effort or {}).get(model), timeout=cfg.cli_timeout_for(model), **extra)

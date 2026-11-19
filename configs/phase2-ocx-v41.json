@@ -32,7 +32,7 @@
     "ocx/anthropic/claude-opus-5-5": "medium",
     "ocx/zai/glm-5.3-flash": "high"
   },
-  "prices_source": "List prices (Anthropic, Z.ai pricing pages, checked 2026-11-17). v4.1 = v2.8 policy (GLM builds, Opus judges once, Opus takes over on fix) on opencodex with the backend fixes from v4: GLM effort pinned high (Z.ai API default is max), builder wall 3300 s for API speed, retries on rate limits and broken streams, no per-call output cap, and GLM's reasoning sent back each turn (opencodex Responses route). v4's A1 check scripts, judge out-of-turns rule and tool probe are dropped (docs/V4_STUDY.md, 2026-11-19). GLM per-call timeout 600 -> 1400 s, the same token budget as Droid's 600 s at the measured speed (~59 vs ~135 tok/s).",
+  "prices_source": "List prices (Anthropic, Z.ai pricing pages, checked 2026-11-17). v4.1 = v2.8 policy (GLM builds, Opus judges once, Opus takes over on fix) on opencodex with the backend fixes from v4: GLM effort pinned high (Z.ai API default is max), builder wall 3300 s for API speed, retries on rate limits and broken streams, no per-call output cap, and GLM's reasoning sent back each turn (opencodex Responses route). v4's A1 check scripts, judge out-of-turns rule and tool probe are dropped (docs/V4_STUDY.md, 2026-11-19). GLM per-call timeout 600 -> 1400 s, the same token budget as Droid's 600 s at the measured speed (~59 vs ~135 tok/s). Judge fixes (2026-11-19): through opencodex the Opus judge sometimes wrote invented tool calls and results until 64k tokens, and v2.8's no-verdict = ship shipped those builds unreviewed. The first explore request is now read out of such a reply, Opus output is capped at 16k per call, and no verdict = fix (v4's rule).",
   "merge_chains": true,
   "reviewer_model": "",
   "acceptance_model": "",
@@ -58,5 +58,9 @@
   "max_output_tokens": 0,
   "reasoning_replay_models": [
     "ocx/zai/glm-5.3-flash"
-  ]
+  ],
+  "max_output_tokens_by_model": {
+    "ocx/anthropic/claude-opus-5-5": 16000
+  },
+  "judge_out_of_turns_fix": true
 }
