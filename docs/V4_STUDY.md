@@ -68,3 +68,21 @@ Test before trusting either result (one change, small run):
   45k tokens and 7 minutes, it fixes cause 1 for v2.8 too.
 - ocx28: v2.8 on opencodex, 12 dev tasks x 1. Without it, v2.8's held-out numbers (Droid) and anything new
   (opencodex) are not on the same backend.
+
+## v4.1 result and decision (2026-11-19, 14:45)
+
+v4.1 = v2.8 policy on opencodex plus the "keep" list above, GLM reasoning replay (Responses route), no output cap,
+and the judge fixes (5ff89e4). Batch v41d2, stopped by decision after 6 of 12 tasks. Evidence: Verified locally.
+
+| same 6 tasks | solves | cost (list price) | builder out tok (median) | builder min | sent to Opus | takeover in tok |
+|---|---|---|---|---|---|---|
+| v2.8 (dv8, Droid) | 3 | $4.21 | 15k | 3 | 5 of 6 | 99k |
+| v4.1 (v41d2, opencodex) | 2 | $5.92 | 39k | 14 | 6 of 6 | 214k |
+
+Reasoning replay fixed v4's empty builders (6 of 6 submitted) but GLM on opencodex is still ~4x slower than on
+Droid, the judge still sends every build to Opus, and takeovers are 2x longer. No sign v4.1 beats v2.8.
+
+**Decision: v2.8 (setup takeover28) is pinned as the final Phase 2 harness.** v4 and v4.1 are reported as tested
+and rejected. Their backend fixes (ocx.py retries, effort pin, supervisor infra rules) stay in the code because any
+future run must use opencodex. Open question for the report: v2.8's held-out numbers are on Droid (ended
+2026-11-03); ocx28 (v2.8 on opencodex, 12 dev tasks) would separate backend from design. Not run.
