@@ -86,3 +86,21 @@ Droid, the judge still sends every build to Opus, and takeovers are 2x longer. N
 and rejected. Their backend fixes (ocx.py retries, effort pin, supervisor infra rules) stay in the code because any
 future run must use opencodex. Open question for the report: v2.8's held-out numbers are on Droid (ended
 2026-11-03); ocx28 (v2.8 on opencodex, 12 dev tasks) would separate backend from design. Not run.
+
+## v2.8 on Droid vs v2.8 on opencodex, all 12 dev tasks (2026-11-19, 18:37)
+
+v41d2 resumed and finished as the ocx28 comparison (v4.1 is v2.8's policy; only backend and judge-runaway fixes
+differ). 1 run per task, no infrastructure-ended runs. Evidence: Verified locally.
+
+| | solves | cost | cost/run | cost/solve | builder out tok | builder min | sent to Opus | takeovers solved | takeover in tok |
+|---|---|---|---|---|---|---|---|---|---|
+| v2.8 Droid (dv8) | 6/12 | $11.09 | $0.92 | $1.85 | 45k | 7 | 11 | 5 of 11 | 153k |
+| v2.8 opencodex (v41d2) | 3/12 | $13.31 | $1.11 | $4.44 | 78k | 24 | 12 | 3 of 12 | 214k |
+
+Lost on opencodex: fin-saccr, react-lead-form, risk-scorer (fin-saccr and react flipped run to run before).
+No task was gained. Two things changed, not one: the GLM builder is slower and does less (cause 1 above), and the
+Opus takeover solved 25% of its tasks instead of 45% while reading 40% more input. With 12 tasks and three known
+flippers this is not proof of a backend effect, but it points the same way as v4d6.
+
+Consequence for the report: v2.8's held-out numbers (Droid) stand as measured; any new run on opencodex is a
+different system and must be compared only with other opencodex runs.
