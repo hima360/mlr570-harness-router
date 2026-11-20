@@ -1,0 +1,40 @@
+{
+  "person": "mahek",
+  "model": "gpt-6.1-sol",
+  "plan": "runs/plan_rerun_order.tsv",
+  "parallel": 2,
+  "cap_wait_minutes": 30,
+  "max_cap_retries": 24,
+  "task_timeout_minutes": 180,
+  "datasets": {
+    "tb4": "terminal-bench/terminal-bench@4.0.0",
+    "swe": "swebenchpro"
+  },
+  "harnesses": {
+    "claude-code": "harbor run -d {dataset} -i {task} -a claude-code -m openai/{model} --ak version=2.1.316 --ae CLAUDE_CODE_EFFORT_LEVEL=medium --ae \"ANTHROPIC_CUSTOM_HEADERS=Authorization: Bearer %OCX_BRIDGE_TOKEN%\" -n 1 -o {outdir} --job-name run --agent-setup-timeout-multiplier 3",
+    "codex": "harbor run -d {dataset} -i {task} -a codex -m openai/{model} --ak reasoning_effort=medium --ak version=0.162.1 --ak \"config={{\\\"skills\\\":{{\\\"include_instructions\\\":false,\\\"bundled\\\":{{\\\"enabled\\\":false}}}},\\\"features\\\":{{\\\"memories\\\":false}}}}\" -n 1 -o {outdir} --job-name run --agent-setup-timeout-multiplier 3",
+    "hermes": "harbor run -d {dataset} -i {task} -a p1agents:HermesPinned -m openai/openai/{model} --ak version=v2026.9.21 --ak toolsets=terminal,file,web,todo -n 1 -o {outdir} --job-name run --agent-setup-timeout-multiplier 3",
+    "zcode": "harbor run -d {dataset} -i {task} -a p1agents:ZCode -m openai/{model} -n 1 -o {outdir} --job-name run"
+  },
+  "prices_per_million": {
+    "claude-sonnet-5-5": {
+      "input_tokens": 2.0,
+      "output_tokens": 10.0,
+      "cached_tokens": 0.1
+    },
+    "gpt-6.1-sol": {
+      "input_tokens": 2.0,
+      "output_tokens": 10.0,
+      "cached_tokens": 0.0
+    },
+    "glm-5.3-flash": {
+      "input_tokens": 0.15,
+      "output_tokens": 0.5,
+      "cached_tokens": 0.0
+    }
+  },
+  "task_prefix": {
+    "tb4": "terminal-bench/",
+    "swe": ""
+  }
+}

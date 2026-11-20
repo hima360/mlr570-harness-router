@@ -62,11 +62,18 @@ def parse_result(outdir):
     if not r:
         return {}
     a = r.get("agent_result") or {}
+    tool_calls = (a.get("metadata") or {}).get("tool_calls")
+    if tool_calls is None:  # e.g. Codex: count tool calls in Harbor's trajectory.json
+        try:
+            steps = json.loads((trial / "agent" / "trajectory.json").read_text()).get("steps", [])
+            tool_calls = sum(len(s.get("tool_calls") or []) for s in steps)
+        except (OSError, ValueError, AttributeError):
+            tool_calls = None
     reward = ((r.get("verifier_result") or {}).get("rewards") or {}).get("reward")
     cached = a.get("n_cache_tokens") or 0
     return {"passed": None if reward is None else reward == 1,
             "input_tokens": max((a.get("n_input_tokens") or 0) - cached, 0), "cached_tokens": cached,
-            "output_tokens": a.get("n_output_tokens"), "tool_calls": (a.get("metadata") or {}).get("tool_calls")}
+            "output_tokens": a.get("n_output_tokens"), "tool_calls": tool_calls}
 
 
 def capped_inside(outdir):
@@ -95,7 +102,7 @@ def run_one(bench, task, run, harness):
     outdir = Path("runs") / person / harness / bench / f"{task}__r{run}"
     cmd = cfg["harnesses"][harness].format(  # Harbor names TB tasks terminal-bench/<task>, SWE ones bare
         dataset=cfg["datasets"][bench], task=cfg.get("task_prefix", {}).get(bench, "") + task, model=model,
-        outdir=outdir)
+        outdir=outdir.resolve())  # absolute: a relative -o broke Harbor's artifact copy on Windows
     for attempt in range(cfg.get("max_cap_retries", 24) + 1):
         while time.time() < resume_at[0]:          # another worker hit the cap
             time.sleep(min(30, max(1, resume_at[0] - time.time())))
