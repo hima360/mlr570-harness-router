@@ -18,7 +18,7 @@
     },
     "gpt-6.1-sol": {
       "input": 2.0,
-      "cached": 0.0,
+      "cached": 0.1,
       "output": 10.0
     },
     "anthropic/claude-sonnet-5-5": {
