@@ -64,10 +64,28 @@ With 12 tasks and three tasks known to flip between runs, the drop is not proven
 opencodex showed the same pattern (`docs/V4_STUDY.md`). It answers our Phase 1 question from a different side:
 the same models under the same policy gave different pass rates and costs once the layer around them changed.
 
+### Held-out on opencodex (18 tasks x 1 run, 2026-11-19/20)
+
+To see whether v2.8's gain survives the backend change, we ran v2.8 and Opus alone once more on all 18 held-out
+tasks, both on opencodex (job `hox1`, per-task table in `docs/HOX1_RESULTS.md`):
+
+| setup | backend | solved | total cost | cost per solve |
+|---|---|---|---|---|
+| Opus 5.5 alone | Droid (2 runs/task) | 4 / 35 (11%) | $31.31 | $7.83 |
+| v2.8 | Droid (2 runs/task) | 11 / 36 (31%) | $41.83 | $3.80 |
+| Opus 5.5 alone | opencodex | 2 / 18 (11%) | $18.70 | $9.35 |
+| v2.8 | opencodex | 4 / 18 (22%) | $23.22 | $5.80 |
+
+Opus alone solved the same share on both backends; v2.8 dropped from 31% to 22% but still solved twice as many
+tasks as Opus alone, at 24% more total cost and 38% less per solve. Every task Opus alone solved, v2.8 solved too
+(hof-topology, sglang-qwen-burst); v2.8 added roy-polymorph-cn and sound-change-cascade. With 1 run per task this
+is two tasks of difference, so it supports the direction of the Droid result, not its size. Two Opus-alone runs
+ended on a provider rate limit and were rerun; none was left out.
+
 What this means for our numbers:
 
-1. v2.8's held-out result stands as measured, on Droid. Runs on opencodex are a different system and are compared
-   only with other opencodex runs.
+1. v2.8's held-out result stands as measured, on Droid. On opencodex the routed harness still beat Opus alone on
+   held-out tasks, by less: the gain depends partly on the backend, not only on the routing policy.
 2. **List price vs subscription.** On a flat subscription the extra 34% list-price cost of v2.8 is spent quota, not
    money, and GLM work on a Coding Plan is close to free. The "cost" a user sees depends on how the models are
    bought, which list-price accounting hides. We report list price so the setups are comparable.
