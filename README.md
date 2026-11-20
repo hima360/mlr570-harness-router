@@ -67,7 +67,10 @@ harnesses. Tell it explicitly not to edit `plan.tsv`, the prices or the log fiel
 Design: `docs/PHASE2_PLAN.md`.
 ### Versions
 
-- **Main version: v3.10** (setup `main`, alias of `takeover310`, config `configs/phase2-droid-glm-takeover310.json`).
+- **Final version (decided 2026-11-19): v2.8** (setup `takeover28`, branch `phase2/v2.8`, tag `phase2-v2.8`).
+  v3.10 below stays as the cheaper variant, but its held-out run is incomplete (26 of 36 trials). v4 and v4.1 were
+  tested and rejected on dev tasks. Report draft: `docs/PHASE2_REPORT.md`; backend change: `docs/V4_STUDY.md`.
+- **Previous main version (2026-11-03): v3.10** (setup `main`, alias of `takeover310`, config `configs/phase2-droid-glm-takeover310.json`).
   GLM-5.3 Flash builds; Opus 5.5 judges once and, on "fix", takes over in the same container; Opus's session is
   kept whole (300k chars) so its prompt cache holds; no judge or takeover when the builder used its whole command
   budget. Held-out (seeds 570-572), same 26 trials: v3.10 5/26 $16.74, Opus alone 3/26 $21.08, v2.8 8/26 $24.52.

@@ -30,6 +30,11 @@ def run(config: str, prefix: str, parallel: int, tasks: list[str], setups=None, 
              for r in range(1, repeats + 1) for t in tasks for s in chosen]
     log = open(ROOT / "jobs" / f"{prefix}.queue.log", "a", buffering=1)
     running = {}
+    from phase2.quota import launch_gate
+
+    # the GLM quota gate applies when any queued config uses Ammar's Z.ai account through opencodex
+    gated = any("ocx/zai/" in (ROOT / q[4]).read_text() for q in queue)
+    last_wait = ""
     while queue or running:
         for name, pid in list(running.items()):
             try:  # our own children: reap them, or they stay as zombies and look alive
@@ -39,7 +44,15 @@ def run(config: str, prefix: str, parallel: int, tasks: list[str], setups=None, 
             if done:
                 log.write(f"{time.strftime('%H:%M:%S')} done {name}\n")
                 del running[name]
-        while queue and len(running) < parallel:
+        gate, why = launch_gate() if queue and len(running) < parallel and gated else ("go", "")
+        if gate == "stop":
+            log.write(f"{time.strftime('%H:%M:%S')} STOP launching: {why}; {len(queue)} runs not started\n")
+            queue.clear()
+        elif gate == "wait":
+            if why != last_wait:
+                log.write(f"{time.strftime('%H:%M:%S')} waiting to launch: {why}\n")
+            last_wait = why
+        while gate == "go" and queue and len(running) < parallel:
             name, task, policy, caps, cfg_path = queue.pop(0)
             if (ROOT / "jobs" / name).exists():
                 log.write(f"skip {name} (exists)\n")

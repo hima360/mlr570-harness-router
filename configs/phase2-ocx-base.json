@@ -1,0 +1,50 @@
+{
+  "tiers": [
+    "ocx/zai/glm-5.3-flash",
+    "ocx/zai/glm-5.3-flash",
+    "ocx/anthropic/claude-opus-5-5"
+  ],
+  "planner_model": "ocx/anthropic/claude-opus-5-5",
+  "fixer_model": "ocx/anthropic/claude-opus-5-5",
+  "policy": "planner",
+  "confidence_threshold": 0.35,
+  "base_url": "http://127.0.0.1:10100/v1",
+  "api_key": "local",
+  "prices_per_million": {
+    "ocx/zai/glm-5.3-flash": {
+      "input": 0.15,
+      "cached": 0.03,
+      "output": 0.5
+    },
+    "ocx/anthropic/claude-opus-5-5": {
+      "input": 4.0,
+      "cached": 0.2,
+      "output": 20.0
+    }
+  },
+  "max_plan_steps": 8,
+  "max_parallel": 3,
+  "worker_step_limit": 40,
+  "worker_command_timeout": 180,
+  "check_timeout": 300,
+  "random_seed": 570,
+  "reasoning_effort": {
+    "ocx/anthropic/claude-opus-5-5": "medium",
+    "ocx/zai/glm-5.3-flash": "high"
+  },
+  "prices_source": "List prices (Anthropic, Z.ai pricing pages, checked 2026-11-17). opencodex backend; base config for the single-model baselines (GLM alone = fixed:1, Opus alone = fixed:2), same as phase2-droid-glm.json except the backend (2026-11-18). Per-call output cap 32k tokens (Droid-era GLM p99 ~32k; 2026-11-18 API runs had 61k-token runaway calls). GLM effort pinned to high: Z.ai's API default is max, Droid's default was high (docs.z.ai concept-param, droid exec --help, 2026-11-18).",
+  "merge_chains": true,
+  "reviewer_model": "",
+  "acceptance_model": "",
+  "planner_explore": 8,
+  "lead_reviews": 2,
+  "best_of_models": [],
+  "planner_top_tier": true,
+  "single_step_tier": 1,
+  "cli_timeout_by_model": {
+    "ocx/anthropic/claude-opus-5-5": 300,
+    "ocx/zai/glm-5.3-flash": 600
+  },
+  "planner_role": "advisor",
+  "max_output_tokens": 32000
+}

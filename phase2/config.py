@@ -164,6 +164,12 @@ class HarnessConfig:
     context_budget_chars: int = 32000
     # claude/ workers: CLAUDE_CODE_MAX_OUTPUT_TOKENS per call (0 = CLI default). Droid has no such flag.
     max_output_tokens: int = 8000
+    # ocx/ models whose earlier reasoning is sent back each turn (opencodex Responses route). GLM-5.x expects it
+    # ("interleaved thinking"); without it the v4 builder re-derived the task every turn (docs/V4_STUDY.md). v4.1.
+    reasoning_replay_models: list = field(default_factory=list)
+    # ocx/ models: per-model output cap per call, overriding max_output_tokens (0 or missing = that default).
+    # v4.1: the Opus judge looped to 64k tokens of invented tool calls when uncapped (2026-11-19).
+    max_output_tokens_by_model: dict = field(default_factory=dict)
     # Submit gate: times per attempt a submit is sent back because the step's check failed (0 = off).
     submit_checks: int = 2
     # CLI workers keep one session per attempt and send only new turns, so the provider caches the prefix.
@@ -176,6 +182,17 @@ class HarnessConfig:
     # v3.10: builder exits that end the run without a judge or takeover (e.g. LimitsExceeded: the builder used its
     # whole command budget; those takeovers solved 0/4 on dev and 0/4 on held-out). Empty = off.
     takeover_skip_exits: list[str] = field(default_factory=list)
+    # v4 A1 (verified done): the builder leaves a check script, one check per requirement (CHECKS_NOTE); the harness
+    # runs it before the judge, and the judge decides from the task next to the script and its output. Dev
+    # 2026-11-18: v2.8's judge shipped 1-2 of 12 runs, handing 21 of 24 to the Opus takeover. Off = v2.8.
+    verified_done: bool = False
+    checks_timeout_sec: int = 600
+    # v4: a judge that runs out of turns without a verdict says "fix" (was "ship": phase2/review.py, red team
+    # 2026-11-18). Off = v2.8 behaviour.
+    judge_out_of_turns_fix: bool = False
+    # v4 B1: list which common tools exist in the container at the start (7% of failed dev commands were
+    # "command not found"). Off = v2.8.
+    tool_probe: bool = False
     max_parallel: int = 3
     worker_step_limit: int = 40
     worker_command_timeout: int = 180
