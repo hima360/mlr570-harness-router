@@ -10,7 +10,8 @@ the harness, a spread of 30 percentage points, while the gap between the stronge
 averaged over all harnesses was 14 points (41\% for GPT-6.1 Sol against 27\% for GLM-5.3 Flash). For GPT-6.1 Sol
 the harness changed cost more than pass rate: 18 solves under Codex CLI cost \$17.83, and 17 solves under ZCode
 cost \$126.05. In Phase~2 we held both models fixed and changed only how our own harness divided the work between
-them, and the number of solved tasks almost tripled. A pass rate reported under a model's name is therefore a
+them, and the cascade solved 11 of 36 evaluation runs against 4 of 35 for the strong model alone. That gap is
+not statistically significant at our sample size, but it points the same way as Phase~1. A pass rate reported under a model's name is therefore a
 measurement of a model, a harness and a serving setup together. We think comparisons between models are only
 meaningful when all three are stated, and that the harness deserves to be treated as a design variable in its
 own right rather than as a neutral container.
@@ -62,16 +63,13 @@ require a hand-off that the strong model can verify quickly, rather than a summa
 
 \paragraph{The serving setup is part of the system too.}
 Our third research question was not planned. It arose when the subscription through which Factory served both
-models ended during the evaluation, and we had to continue with GLM-5.3 Flash served by Z.ai. The policy of the
-harness did not change, yet several properties of the system did. GLM produced about 59 output tokens per second
-instead of roughly 130, the default reasoning effort was higher, and the handling of rate limits and broken
-streams moved from the provider into our own code. The cascade still solved more tasks than Opus alone (4 of 18
-against 2 of 18), but its lead was smaller, while Opus alone solved the same share as before. Because the
-provider and the access route changed together and the samples are small, we treat this as an observation that
-motivates a controlled study rather than as a measured effect. It does, however, show that the same model name
-can stand for different systems, and that results which depend on a commercial service can become hard to
+models ended during the evaluation, and we had to continue with GLM-5.3 Flash served by Z.ai. The policy of the harness did not change, yet the system around it did: the new provider generated
+tokens more slowly, used a higher default reasoning effort, and left the handling of rate limits and broken
+streams to our own code. The results in Section~\ref{sec:p2results} are too small to measure the effect of this
+change, so we treat it as the motivation for a controlled study. What it does show is that the same model name
+can stand for different systems, and that a result which depends on a commercial service can become hard to
 reproduce once that service changes or ends. For this reason we kept the harness code, configurations and run
-traces of every condition. \todo{Group: public repository or ``available on request''.}
+traces of every condition, and they are available from the authors on request.
 
 \paragraph{What cost means.}
 We report cost as logged tokens multiplied by public list prices, so that all conditions are measured on the same
