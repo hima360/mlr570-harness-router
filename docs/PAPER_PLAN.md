@@ -36,11 +36,16 @@ Working title: *Harness-Aware, Cost-Efficient Model Routing for Agentic LLM Syst
 3. **Phase 1 setup.** 3 models x 4 harnesses, 40 runs each over 34 tasks; run count set by subscription quotas
    and agreed with the instructor.
 4. **Phase 1 result.** The harness matters for pass rate, cost and time: with the same model, GLM passed 4 to 16
-   of 40 runs and Sonnet 10 to 16, depending on the harness.
-5. **Cheap model, right harness.** The harness moves results more than the model does. GLM's spread across
-   harnesses (4 to 16 of 40) is larger than the gap between GLM and Sonnet overall (43 vs 51 of 160). GLM equals
-   Sonnet in Claude Code (16 vs 16) and beats it in ZCode (15 vs 10), at $0.63-0.99 per solve vs Sonnet's best
-   $2.13. The trade-off is time: GLM runs took a median of 42-47 minutes there vs 10-11 for Sonnet.
+   of 40 runs, Sonnet 10 to 16 and Sol 14 to 18, depending on the harness. For Sol the harness mostly moved cost:
+   $17.83 under Codex vs $126.05 under ZCode (7x) for 18 vs 17 solves.
+5. **Cheap model, right harness.** Choosing the harness can matter as much as choosing the model. In Claude Code
+   all three models passed 16 of 40, at $0.63 (GLM), $1.39 (Sol) and $2.13 (Sonnet) per solve; GLM also beat
+   Sonnet in ZCode (15 vs 10). Across all harnesses Sol was strongest (41% vs Sonnet 32%, GLM 27%), but GLM's pass
+   rate across harnesses (10% to 40%, a 30-point spread) varied more than the models differ overall (14 points). The trade-off is time: GLM runs took a median of
+   42-47 minutes in its best harnesses vs 10-11 for Sonnet.
+5a. **No single best harness (RQ1a).** Codex was Sol's best harness (18/40) and GLM's worst (4/40); ZCode was
+   second for GLM, second for Sol and last for Sonnet. Each provider's own harness did well for its model (Codex
+   for Sol, ZCode near the top for GLM, Claude Code top for Sonnet), but Claude Code was also top for GLM.
 6. **Splitting coupled tasks.** Our first design split each task into steps and routed each step (planner +
    Laya). Terminal-Bench tasks proved tightly coupled: steps share hidden state such as files and seeds, so
    splitting added coordination failures (a step run in parallel needed a seed another step had to find;
@@ -59,7 +64,7 @@ Working title: *Harness-Aware, Cost-Efficient Model Routing for Agentic LLM Syst
     run each with GLM served by Z.ai). The 18 were part of an early baseline sweep that motivated v2.8's design;
     no setting was tuned on them afterwards.
 12. **Reliability.** The harness decides whether a run finishes (GLM: 7 no-result runs of 40 under Hermes vs 0-3
-    elsewhere), and single runs flip (6 of 24 groups), so 1-2 task gaps are treated as noise.
+    elsewhere), and single runs flip (12 of 36 groups), so 1-2 task gaps are treated as noise.
 13. **Where the cascade's cost goes.** 94% of v2.8's cost is the Opus takeover, which explains the 34% higher
     total and points to the next design step (shorter takeovers).
 
@@ -75,7 +80,7 @@ Working title: *Harness-Aware, Cost-Efficient Model Routing for Agentic LLM Syst
 ## Facts we present
 
 Computed from the logs on main, 2026-11-21. Excluded hardware tasks (live-database-cutover, jax-speedrun-gpu)
-are left out; a run with no result counts as not passed. GPT-6.1 Sol is added after Mahek's merge.
+are left out; a run with no result counts as not passed. 
 
 ### Phase 1: 40 runs per configuration (34 tasks: 28 Terminal-Bench 4.0, 6 SWE-Bench Pro)
 
@@ -92,9 +97,13 @@ Plan (seed 570): 30 Terminal-Bench + 6 SWE-Bench Pro tasks, plus 2 extra runs on
 | GLM-5.3 Flash | ZCode | 15 | 11 / 4 | $14.89 | $0.99 | 41.7 |
 | GLM-5.3 Flash | Hermes | 8 | 6 / 2 | $22.12 | $2.76 | 52.7 |
 | GLM-5.3 Flash | Codex CLI | 4 | 1 / 3 | $10.88 | $2.72 | 24.0 |
+| GPT-6.1 Sol | Codex CLI | 18 | 14 / 4 | $17.83 | $0.99 | 26.4 |
+| GPT-6.1 Sol | ZCode | 17 | 14 / 3 | $126.05 | $7.41 | 22.2 |
+| GPT-6.1 Sol | Claude Code | 16 | 12 / 4 | $22.20 | $1.39 | 29.4 |
+| GPT-6.1 Sol | Hermes | 14 | 13 / 1 | $83.91 | $5.99 | 42.3 |
 
-- Totals: Sonnet 51/160, $135.76, $2.66 per solve. GLM 43/160, $58.02, $1.35 per solve.
-- Runs with no result: GLM 13 (Hermes 7), Sonnet 0.
+- Totals: Sol 65/160, $249.99, $3.85 per solve. Sonnet 51/160, $135.76, $2.66 per solve. GLM 43/160, $58.02, $1.35 per solve. All 480 runs on main (Sol merged in PR 17, cost at the $0.10 cached price).
+- Runs with no result: GLM 13 (Hermes 7), Sol 11 (Claude Code 6), Sonnet 0.
 - Token counts are left out until cached-token accounting is checked across harnesses.
 
 ### Variance (3 tasks x 3 runs in every configuration)
@@ -112,8 +121,12 @@ P = pass, F = fail, - = no result (runs 1, 2, 3).
 | GLM, Codex | F F F | F F F | F F F |
 | GLM, Hermes | F F F | - F F | P P - |
 | GLM, ZCode | F P P | F F F | P F P |
+| Sol, Claude Code | F F P | F F F | P F P |
+| Sol, Codex | P F F | F F F | F P F |
+| Sol, Hermes | F F F | F F F | P P P |
+| Sol, ZCode | P F P | F F F | F P P |
 
-6 of 24 groups flipped between pass and fail; 2 more changed only because a run gave no result. We treat 1-2
+12 of 36 groups flipped between pass and fail; 2 more changed only because a run gave no result. We treat 1-2
 task gaps as possible noise and call a difference real only when it is larger.
 
 ### Router feasibility study (proposal, 24 author-labelled tasks, zero-shot)
@@ -193,7 +206,7 @@ Facts that are easy to get wrong:
 - On Droid the evaluation ran 2 runs per task (out of 36); with Z.ai 1 run per task (out of 18). Compare rates.
 - v2.8 is the final method; v3.x and v4.x are ablations in one table.
 - Both backends served GLM-5.3 Flash (`droid/glm-5.3-flash`, `zai/glm-5.3-flash`), not GLM 5.3.
-- Mahek's Sol costs change after the cached-price fix ($0 to $0.10 per million cached tokens, PR 15).
+- Sol costs are at the $0.10/M cached price (PR 15, recomputed in PR 17); never use the older Sol numbers.
 
 ### Compute-budget limitation (suggested wording)
 
@@ -206,8 +219,7 @@ Facts that are easy to get wrong:
 
 ## Open items
 
-- [ ] Mahek: one PR with her full Sol column (136 first runs from `phase1/mahek-reruns` + 24 variance runs from
-      `phase1/mahek-variance` = 160), then `scripts/recompute_cost.py` for the $0.10 cached price.
-- [ ] After Mahek's PR: compute Phase 1 tables and the Pareto figure from all three columns (script, not by hand).
+- [x] Mahek's Sol column merged (PR 17, 160 runs, $0.10 cached price).
+- [ ] Compute Phase 1 tables and the Pareto figure from all three columns (script, not by hand).
 - [ ] Group: agree the page limit.
 - [ ] Group: release the repo publicly, or say "available on request" in the paper.
