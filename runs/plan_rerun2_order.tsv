@@ -1,0 +1,12 @@
+# rerun2 ORDER: null rows only, wal-recovery then vpp then sglang first (Mahek, 2026-11-20); only runs whose null row has been voided will execute
+tb4	wal-recovery-ordering	1
+tb4	vpp-loss-divergence	1
+tb4	sglang-qwen-burst	1
+tb4	ks-solver-cpp	1
+tb4	glycan-ms2-elucidation	1
+tb4	vllm-deepseek-streaming	1
+tb4	hof-topology-interpenetration	1
+swe	instance_element-hq__element-web-6205c70462e0ce2e1e77afb3a70b55d0fdfe1b31-vnan	1
+tb4	pretrain-shard-corruption	1
+tb4	takens-embedding-lean	1
+swe	instance_protonmail__webclients-7e54526774e577c0ebb58ced7ba8bef349a69fec	1
