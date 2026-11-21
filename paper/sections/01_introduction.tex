@@ -1,0 +1,20 @@
+% WRITER: Mahek. ~1 page. Four paragraphs, in this order (docs/PAPER_PLAN.md, claim 1):
+% (1) Agents are ranked on Terminal-Bench / SWE-bench by model name, but every score comes from a model inside a
+%     harness: the software that sets its prompts, tools, memory, retries and turn limits.
+% (2) The harness is usually treated as a neutral container; we argue it is part of the system: the same model
+%     can pass, cost and take very different amounts depending on it.
+% (3) If the harness matters this much, its design is a lever: it can decide which model does which part of the
+%     work and when to hand over.
+% (4) RQ1 (RQ1a, RQ1b), RQ2, RQ3 (exploratory), then the four contributions (list).
+% Do NOT frame the paper around frontier vs mid-tier pricing; the thesis is the harness.
+\section{Introduction}
+\todo{Introduction.}
+
+\paragraph{Research questions.}
+\textbf{RQ1.} For a fixed model, how much does the harness change pass rate, cost and time?
+\textbf{RQ1a.} Is there one best harness, or does the best harness depend on the model?
+\textbf{RQ1b.} Can a cheaper model in a well-matched harness equal a more expensive model?
+\textbf{RQ2.} Can a harness that divides work between a cheap and a strong model, using the same models, beat
+the strong model alone on solves and cost per solve?
+\textbf{RQ3 (exploratory).} With model and harness fixed, does the provider serving the model change pass rate,
+cost and time?

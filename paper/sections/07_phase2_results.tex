@@ -1,0 +1,19 @@
+% DRAFTED; Ibrahim checks. ~1.25 pages. Numbers: docs/PAPER_PLAN.md.
+\section{Phase 2 Results}
+\begin{table}[t]
+\centering\small
+\caption{Cascade (v2.8) vs single models on 18 evaluation tasks. Cost at public list prices.}
+\label{tab:p2}
+\begin{tabular}{llrrr}
+\toprule
+Setup & GLM served by & Solved & Cost & \$/solve\\
+\midrule
+v2.8 & Factory & 11/36 & 41.83 & 3.80\\
+Opus 5.5 alone & -- & 4/35 & 31.31 & 7.83\\
+GLM-5.3 Flash alone & Factory & 2/34 & 3.21 & 1.60\\
+v2.8 & Z.ai & 4/18 & 23.22 & 5.80\\
+Opus 5.5 alone & -- & 2/18 & 18.70 & 9.35\\
+\bottomrule
+\end{tabular}
+\end{table}
+\todo{Phase 2 results: splitting results, cascade, provider replication (RQ3), ablation table.}
