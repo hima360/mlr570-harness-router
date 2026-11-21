@@ -20,7 +20,8 @@ a seed that only the first could find; the second step spent 95\% of the run's b
 did split a task, they tended to produce a straight chain of four steps with no parallel work, so splitting added
 hand-offs without saving time, and results passed between steps were truncated to 300 characters. Across these
 early versions, the decomposition design solved 3 of 37 runs, against 5 of 22 for Claude Sonnet~5.5 alone and
-5 of 10 for Claude Opus~5.5 alone. The router also had little signal to work with: Laya's 91 step decisions
+5 of 10 for Claude Opus~5.5 alone. These runs came from separate development batches that did not use the same
+tasks for every condition, so the comparison shows the direction of the result rather than its size. The router also had little signal to work with: Laya's 91 step decisions
 clustered around the middle of its scale (mean 1.16, SD 0.19 on 0--2), and 77\% of steps went to the middle tier.
 We therefore kept each task whole and moved the routing decision to a point where the task's difficulty can be
 observed.

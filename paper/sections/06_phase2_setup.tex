@@ -3,12 +3,14 @@
 \label{sec:p2setup}
 
 We used 30 Terminal-Bench~4.0 tasks: 12 development tasks for design decisions and 18 evaluation tasks for the
-final comparison. The two sets do not overlap; 9 of the 18 evaluation tasks also appear in Phase~1. All 18 were
+final comparison. We call the 18 tasks evaluation tasks rather than held-out tasks for the following reason. The two sets do not overlap; 9 of the 18 evaluation tasks also appear in Phase~1. All 18 were
 part of an early 37-task baseline sweep whose overall results motivated the v2.8 design; no setting was tuned on
 them after v2.8 was fixed, and the evaluation used fresh runs.
 
 The evaluation tasks were drawn with seeds 570--572. Each ran twice per condition with both models served through Factory's Droid
 subscription. When that subscription ended, we ran each evaluation task once more per condition with GLM-5.3
-Flash served by Z.ai and Opus by Anthropic. Both were reached through opencodex, a local tool we use to route
+Flash served by Z.ai and Opus by Anthropic. This second round was designed to test whether the cascade's lead over
+the strong model survived the change of provider, so it covered v2.8 and Opus alone; GLM-5.3 Flash alone, the
+weakest condition in the first round (2 of 34), was not repeated. Both models were reached through opencodex, a local tool we use to route
 subscription access to any harness; it is not a model provider. A task counts as solved when every hidden test
 passes. Cost is computed from logged tokens at public list prices, not from what the subscriptions cost us.

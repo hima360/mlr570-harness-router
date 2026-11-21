@@ -1,4 +1,35 @@
 % Phase 1 per-task tables, prices, harness versions, rerun and void rules (Ammar);
 % Phase 2 per-task tables, judge and takeover prompts (drafted).
+% Phase 2 ablation numbers: docs/OVERNIGHT_LOOP.md (2026-11-02/03 log), docs/V4_STUDY.md.
 \section{Additional Results}
-\todo{Appendix.}
+\todo{Phase 1 appendix (Ammar).}
+
+\subsection{Phase 2 variants}
+\label{app:p2}
+
+\begin{table}[h]
+\centering\small
+\caption{Variants of v2.8 on the development tasks. Each variant is compared with v2.8 (or, for v3.7, with v3.5)
+on the same tasks. Solved runs and cost at public list prices.}
+\label{tab:ablations}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llll}
+\toprule
+Version & Change & Variant & Reference\\
+\midrule
+v2.9 & GLM repair round before the takeover & 5/10, \$10.58 & 6/10, \$9.88\\
+v3.0 & GLM-5.3 takes over instead of Opus & 1/7, \$3.16 & 4/7, \$5.15\\
+v3.1 & Hand-off note for the takeover & 2/6, \$5.28 & 3/6, \$4.62\\
+v3.4 & Lower reasoning effort in the takeover & stopped after 2 tasks$^a$ & --\\
+v3.5 & Opus prompt cache kept & 6/12, \$8.78 & 6/12, \$12.00\\
+v3.7 & Sonnet 5.5 takes over (on v3.5) & 2/7, \$3.36 & 4/7, \$2.70\\
+v4 & Builder check script, stricter judge$^b$ & 9/21 & 6/12 (n.c.)\\
+\midrule
+v3.5 & Evaluation tasks (18 $\times$ 2) & 7/36, \$35.88 & 11/36, \$41.83\\
+\bottomrule
+\end{tabular}}
+
+\smallskip
+\footnotesize $^a$ The takeover gave up on a task that v2.8 solved, so the variant was stopped.
+$^b$ Run with Z.ai-served GLM and the reference with Factory-served GLM, so the two rows differ in provider and run count and are not directly comparable (n.c.).
+\end{table}
