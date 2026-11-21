@@ -161,7 +161,7 @@ steps; the Arch-Router fallback never fired in logged runs, and a fine-tuned Lay
 - Dev control, same 12 tasks: v2.8 6/12 ($11.09) with Factory-served GLM vs 3/12 ($13.31) with Z.ai-served GLM;
   GLM output about 130 vs 59 tokens/s.
 - Ablations that did not beat v2.8: v3.5 (prompt cache kept) 7/36 on held-out, $5.13 per solve; lower effort;
-  Sonnet takeover; capped takeover; GLM fixing from Opus's list; v3.10 skip rule; v4 solve rate 0.40 vs 0.50;
+  Sonnet takeover; capped takeover; GLM fixing from Opus's list; v3.10 skip rule; v4 solve rate 0.43 vs 0.50 (21 runs);
   v4.1 2 of 6 vs 3 of 6.
 - Task sets: 12 dev + 18 evaluation, no overlap; 9 of the 18 are also Phase 1 tasks. All 18 were in an early
   37-task baseline sweep (dt1, 2026-11-02) whose overall results motivated v2.8's design (commit fabb6c3); no

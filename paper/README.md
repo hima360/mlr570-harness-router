@@ -6,7 +6,7 @@ who writes what, and wording rules.
 - `main.tex` pulls in one file per section from `sections/`. Each section file starts with comments naming its
   writer and the facts it may state. Replace the red `\todo{...}` markers with text.
 - `refs.bib` holds the proposal's references. Add new entries only from the source itself.
-- Tables in sections 4 and 7 are already filled from the logs. GPT-6.1 Sol rows are added after Mahek's merge.
+- Tables in sections 4 and 7 are already filled from the logs (all 480 Phase 1 runs, Sol included).
 
 ## Writing in OpenAI Prism
 
