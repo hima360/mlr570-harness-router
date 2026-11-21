@@ -1,0 +1,44 @@
+% DRAFTED from docs/PHASE2_REPORT.md, docs/COORDINATION_DESIGN.md and configs/phase2-droid-glm-takeover28.json.
+% Ibrahim checks facts.
+\section{Phase 2: A Cascade Harness}
+\label{sec:p2method}
+
+Phase~1 treats existing harnesses as fixed. In Phase~2 we build our own harness and ask whether its design can
+change results while the models stay the same. The harness runs as an external agent inside the Harbor
+evaluation framework: it receives the task instruction, issues shell commands in the task container, and reports
+token usage per model call, from which we compute cost at public list prices.
+
+\paragraph{First design: splitting tasks into routed steps.}
+Our proposal described a harness that splits a task into steps and routes each step to the cheapest capable
+model. A planner turns the instruction into a dependency graph of steps, each with an acceptance check; Laya, a
+small typed-decision model, scores the capability each step needs; a fixed table maps the score to a model; a
+worker carries out the step; and a verifier runs the step's check and escalates one tier on failure.
+
+Terminal-Bench tasks proved tightly coupled. Steps share hidden state, such as files on disk and values that one
+step must discover before another can use them. In one run, two steps ran in parallel although the second needed
+a seed that only the first could find; the second step spent 95\% of the run's budget and failed. When planners
+did split a task, they tended to produce a straight chain of four steps with no parallel work, so splitting added
+hand-offs without saving time, and results passed between steps were truncated to 300 characters. Across these
+early versions, the decomposition design solved 3 of 37 runs, against 5 of 22 for Claude Sonnet~5.5 alone and
+5 of 10 for Claude Opus~5.5 alone. The router also had little signal to work with: Laya's 91 step decisions
+clustered around the middle of its scale (mean 1.16, SD 0.19 on 0--2), and 77\% of steps went to the middle tier.
+We therefore kept each task whole and moved the routing decision to a point where the task's difficulty can be
+observed.
+
+\paragraph{Final design (v2.8): build, judge, take over.}
+The harness keeps the whole task in one container and decides who works on it in three stages:
+\begin{enumerate}
+  \item \textbf{Build.} GLM-5.3 Flash, the inexpensive model, attempts the full task (up to 50 commands and
+  25~minutes).
+  \item \textbf{Judge.} Claude Opus~5.5 reviews the result once and returns \emph{ship} or \emph{fix}.
+  \textit{Ship} ends the run with GLM's solution.
+  \item \textbf{Take over.} On \emph{fix}, or when the review fails or GLM never submits, Opus continues in the
+  same container with the problems it found and GLM's notes (up to 60 commands).
+\end{enumerate}
+The decision to defer to the strong model is made after the inexpensive model's attempt rather than from the
+task description, in the spirit of learning-to-defer and model cascades~\cite{chen2023frugalgpt}. The strong
+model starts from a partly built solution instead of an empty container.
+
+\paragraph{Baselines.}
+Opus~5.5 alone and GLM-5.3 Flash alone run inside the same harness, with the same task container, tools and
+logging, so the conditions differ in who works on the task and when.

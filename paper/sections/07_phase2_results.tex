@@ -1,0 +1,46 @@
+% DRAFTED; Ibrahim checks. Numbers: docs/PAPER_PLAN.md "Facts we present".
+\section{Phase 2 Results}
+\label{sec:p2results}
+
+\begin{table}[t]
+\centering\small
+\caption{Cascade (v2.8) and single-model baselines on the 18 evaluation tasks. Cost at public list prices.}
+\label{tab:p2}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llrrr}
+\toprule
+Setup & GLM served by & Solved & Cost (\$) & \$/solve\\
+\midrule
+v2.8 & Factory & 11/36 & 41.83 & 3.80\\
+Opus 5.5 alone & -- & 4/35 & 31.31 & 7.83\\
+GLM-5.3 Flash alone & Factory & 2/34 & 3.21 & 1.60\\
+\midrule
+v2.8 & Z.ai & 4/18 & 23.22 & 5.80\\
+Opus 5.5 alone & -- & 2/18 & 18.70 & 9.35\\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\paragraph{The cascade against the strong model alone (RQ2).}
+On the evaluation tasks, v2.8 solved 11 of 36 runs (31\%) against 4 of 35 (11\%) for Opus alone and 2 of 34 for
+GLM alone (Table~\ref{tab:p2}). It also passed a larger share of hidden tests (75\% against 68\% for Opus alone).
+Cost per solved task fell from \$7.83 to \$3.80, a 51\% reduction, while total cost rose by 34\%, from \$31.31
+to \$41.83. Of v2.8's cost, 94\% went to the Opus takeover, and every solved evaluation run went through a
+takeover: GLM's attempt did not finish tasks by itself, but it gave Opus a partly built starting point. One
+Opus-alone run and two GLM-alone runs produced no result and are excluded.
+
+\paragraph{Changing the serving provider (RQ3, exploratory).}
+With GLM served by Z.ai instead of Factory, v2.8 still solved more than Opus alone (4 of 18 against 2 of 18;
+22\% against 11\%), at \$5.80 against \$9.35 per solve, but its lead was smaller. Opus alone solved the same
+share on both routes. On the 12 development tasks the same pattern held: v2.8 solved 6 of 12 with
+Factory-served GLM and 3 of 12 with Z.ai-served GLM, and GLM produced about 59 output tokens per second against
+roughly 130 under Factory, so the builder needed more than twice the time for the same work. Because the
+provider and the access route changed together and the samples are small, we report this as an observation
+rather than a measured effect.
+
+\paragraph{Variants that did not improve on v2.8.}
+We tested several changes on the development tasks; none beat v2.8.
+Keeping the Opus prompt cache intact (v3.5) lowered cost per call but solved 7 of 36 evaluation runs at \$5.13
+per solve. Lower reasoning effort, Sonnet as the takeover model, capped takeover commands, a GLM repair round
+before the takeover, and a stricter judge (v4) also did not improve the solve rate.
+\todo{Appendix table of ablations with dev numbers.}
