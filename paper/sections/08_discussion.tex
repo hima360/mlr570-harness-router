@@ -32,9 +32,9 @@ single text answer.
 
 \paragraph{What the inexpensive model contributes.}
 In the evaluation runs, no task was solved by GLM-5.3 Flash's build alone; every solved run went through an Opus
-takeover. One could read this as the inexpensive model adding nothing, but the comparison with Opus alone does
-not support that reading. Opus working from an empty container solved 4 of 35 runs, while the cascade, in which
-Opus continued from GLM's partial build, solved 11 of 36. The value of the first stage lies in the work it leaves behind: files
+takeover. One could read this as the inexpensive model adding nothing, but the comparison with Opus alone is
+more consistent with a different reading. Opus working from an empty container solved 4 of 35 runs, while the cascade, in which
+Opus continued from GLM's partial build, solved 11 of 36. The value of the first stage appears to lie in the work it leaves behind: files
 created, dependencies installed and parts of the problem already explored. The strong model then spends its
 budget on the remaining difficulty instead of on setup. This suggests that the useful question for cascades of
 agents is not only whether the inexpensive model can finish a task, but how much of the task it can move forward

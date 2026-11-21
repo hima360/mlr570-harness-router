@@ -1,5 +1,10 @@
 % WRITER: Ammar. Lead with the compute budget (wording in docs/PAPER_PLAN.md), then: small samples
 % (1-2 task gaps within run-to-run variance); commercial backends change and can end (Droid ended 2026-11-03);
-% router baselines compared offline only, fine-tuned Laya not built; evaluation tasks seen in an early sweep.
+% router baselines compared offline only, fine-tuned Laya not built.
+% MUST INCLUDE (reviewer request): the 18 Phase 2 evaluation tasks were part of the early 37-task baseline
+% sweep that motivated v2.8, so they are not fully held out (also stated in Section 6). Suggested sentence:
+% "The 18 evaluation tasks were part of an early baseline sweep that informed the cascade design, so they are
+% not fully held out, although no setting was tuned on them after the design was fixed."
+% Also: GLM-5.3 Flash alone was not rerun with Z.ai (Section 6).
 \section{Limitations}
 \todo{Limitations.}
