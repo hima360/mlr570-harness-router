@@ -1,0 +1,30 @@
+% MLR570 final paper. Plan, facts and wording rules: docs/PAPER_PLAN.md (read it before writing).
+% Each section lives in sections/ and starts with its writer and the facts it may state.
+\documentclass[10pt,twocolumn]{article}
+\usepackage[margin=0.75in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage[hidelinks]{hyperref}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{xcolor}
+\usepackage[section]{placeins} % keep each table inside its own section
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\title{Harness-Aware, Cost-Efficient Model Routing for Agentic LLM Systems}
+\author{Ammar Almzayek \and Mahek \and Ibrahim Monier\\
+MLR570 Advanced Machine Learning}
+\date{}
+\begin{document}
+\maketitle
+\begin{center}\small Ibrahim's part: Sections 5--8 (Phase 2 method, setup, results; Discussion). Draft for review.\end{center}
+\setcounter{section}{4}
+\input{sections/05_phase2_method}
+\input{sections/06_phase2_setup}
+\input{sections/07_phase2_results}
+\input{sections/08_discussion}
+\bibliographystyle{plainnat}
+\bibliography{refs}
+\end{document}
