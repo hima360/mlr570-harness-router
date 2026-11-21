@@ -294,16 +294,27 @@ def make_plan(instruction: str, env_summary: str, ask, max_steps: int, explore=N
 
 
 def _explore_request(reply: str) -> str | None:
-    """The command of an {"explore": "..."} reply, or None for anything else (such as a plan)."""
-    m = re.search(r"\{.*\}", reply or "", re.DOTALL)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    if isinstance(obj, dict) and isinstance(obj.get("explore"), str) and "steps" not in obj:
-        return obj["explore"].strip()
+    """The command of an {"explore": "..."} reply, or None for anything else (such as a plan). Only the first
+    request counts: through opencodex, Opus sometimes writes a run of invented tool calls (`<invoke ...>`) and
+    their made-up results in one reply (2026-11-19, 6 judge calls in v4d6/v41d1); the first one is what it asked."""
+    text = reply or ""
+    dec = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = dec.raw_decode(text, i)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "steps" not in obj:
+            if isinstance(obj.get("explore"), str):
+                return obj["explore"].strip()
+            if "verdict" in obj or "plan" in obj:
+                return None
+    if "<invoke" in text:  # an invented tool call with a raw command
+        m = re.search(r'<parameter name="command">(.*?)</parameter>', text, re.DOTALL)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
     return None
 
 

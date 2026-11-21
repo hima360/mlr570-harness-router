@@ -41,7 +41,8 @@ CONFIG_KEYS = ("policy", "planner_model", "confidence_threshold", "base_url", "m
                "takeover_first_wall_sec", "takeover_step_limit", "takeover_fix_first_max_problems",
                "takeover_fix_step_limit", "spec_model", "repo_map", "handoff", "progress_block",
                "progress_patience", "takeover_effort",
-               "session_nudge_chars", "takeover_skip_exits")
+               "session_nudge_chars", "takeover_skip_exits", "verified_done", "checks_timeout_sec",
+               "judge_out_of_turns_fix", "tool_probe")
 
 
 class RoutedHarness(BaseAgent):
@@ -241,7 +242,11 @@ class RoutedHarness(BaseAgent):
                 trace.log("spec", step=step.id, model=self.cfg.spec_model, text=spec)
             card = (f"\n\nSPEC CARD (the harness's checklist of this task; the task text wins if they disagree):\n{spec}"
                     if spec else "")
-            first_goal = step.goal + card + (HANDOFF_NOTE if self.cfg.handoff else "")
+            from .review import CHECKS_NOTE
+
+            checks_path = "/tmp/phase2_checks.sh"
+            first_goal = step.goal + card + (HANDOFF_NOTE if self.cfg.handoff else "") + \
+                (CHECKS_NOTE.format(path=checks_path) if self.cfg.verified_done else "")
             first_step = step.model_copy(update={"goal": first_goal,
                                                  "worker_step_limit": self.cfg.takeover_first_step_limit,
                                                  "wall_time_sec": self.cfg.takeover_first_wall_sec})
@@ -264,12 +269,37 @@ class RoutedHarness(BaseAgent):
             def explore(cmd):
                 return asyncio.run_coroutine_threadsafe(orch._explore(environment, cmd), loop).result()
 
+            def run_checks() -> str:
+                """v4 A1: run the builder's check script; the judge gets the script, its output and exit code."""
+                import time as _t
+
+                cmd = (f"if [ -f {checks_path} ]; then echo '--- script'; head -c 4000 {checks_path}; "
+                       f"echo; echo '--- output'; cd {orch.workdir} 2>/dev/null; "
+                       f"o=$(timeout {self.cfg.checks_timeout_sec} bash {checks_path} 2>&1); c=$?; "
+                       f"printf '%s\\n' \"$o\" | tail -c 6000; echo \"--- exit code: $c\"; "
+                       f"else echo 'NO CHECK SCRIPT: the colleague did not leave {checks_path}'; fi")
+                t0 = _t.time()
+                try:
+                    r = asyncio.run_coroutine_threadsafe(
+                        environment.exec(cmd, timeout_sec=self.cfg.checks_timeout_sec + 60), loop).result()
+                    out = ((r.stdout or "") + (r.stderr or ""))[:11000]
+                except Exception as e:
+                    out = f"(running the checks failed: {type(e).__name__}: {e})"[:500]
+                res = out.rsplit("--- output", 1)[-1]  # count only the run's output, not the script text
+                trace.log("checks_run", step=step.id, seconds=round(_t.time() - t0, 1),
+                          found="NO CHECK SCRIPT" not in out, passes=res.count("PASS "), fails=res.count("FAIL "),
+                          exit=(out.rsplit("--- exit code:", 1)[-1].strip()[:6] if "--- exit code:" in out else None),
+                          text=out[-2000:])
+                return out
+
             def judge_now(result, msgs, rnd):
+                checks = run_checks() if self.cfg.verified_done else ""
                 try:
                     verdict, probs, n = senior_review(ask, instruction + card, result.summary,
                                                       attempt_digest(msgs, 5000),
                                                       current_diff(20000), explore, self.cfg.senior_review_explore,
-                                                      evidence=True)
+                                                      evidence=True, checks=checks, checks_path=checks_path,
+                                                      out_of_turns="fix" if self.cfg.judge_out_of_turns_fix else "ship")
                 except Exception as e:  # no verdict: the stronger model takes over rather than ship unchecked work
                     verdict, probs, n = "fix", [], 0
                     trace.log("senior_review", step=step.id, model=judge, error=f"{type(e).__name__}: {e}"[:300])

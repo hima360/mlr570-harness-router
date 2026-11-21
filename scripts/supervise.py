@@ -53,6 +53,16 @@ def infra_reason(job_dir: Path) -> str:
     attempts = [e for e in events if e.get("event") == "attempt"]
     if attempts and attempts[-1].get("exit_status") in INFRA_EXITS:
         return f"ended by {attempts[-1]['exit_status']}"
+    if any(e.get("event") == "attempt" and str(e.get("summary", "")).startswith(("litellm.RateLimitError",
+                                                                             "litellm.APIConnectionError", "no model reply for"))
+           for e in events):  # 2026-11-18: the builder died on a provider error and Opus did the task alone
+        return "builder ended by a provider error (rate limit or connection)"
+    broken = [e for e in calls if not str(e.get("reply") or "").strip() and 0 < (e.get("output_tokens") or 0) < 31000]
+    if broken and any(e.get("exit_status") == "RepeatedFormatError" for e in events):  # 2026-11-19, phase2/ocx.py
+        return f"ended by {len(broken)} empty replies from broken provider streams"
+    ar = r.get("agent_result")
+    if isinstance(ar, dict) and "n_input_tokens" in ar and not (ar.get("n_input_tokens") or ar.get("n_output_tokens")):
+        return "no model tokens (proxy, bridge or account down)"  # 2026-11-17: every call failed
     return ""
 
 
@@ -102,14 +112,25 @@ def ensure_docker(prefix: str) -> bool:
 
 def network_ok() -> bool:
     try:
-        return subprocess.run(["curl", "-s", "-o", "/dev/null", "-m", "15", "https://app.factory.ai/"],
+        return subprocess.run(["curl", "-s", "-o", "/dev/null", "-m", "15", "https://api.z.ai/"],
                               timeout=30).returncode == 0
     except subprocess.TimeoutExpired:
         return False
 
 
 def model_ok(model: str) -> bool:
-    """One tiny call (Droid models only; a rejected model id costs nothing)."""
+    """One tiny call (Droid or opencodex models; a rejected model id costs nothing). For opencodex models this also
+    proves the proxy and the provider account work (2026-11-17: a stopped proxy and Claude inbound switched off
+    cost four Phase 1 runs that logged 0 tokens)."""
+    if model.startswith("ocx/"):
+        from phase2 import ocx
+
+        try:
+            text, usage = ocx.complete(model, [{"role": "user", "content": "Reply with exactly: ok"}], timeout=120,
+                                       max_output_tokens=200)
+        except Exception:
+            return False
+        return usage.get("prompt_tokens", 0) > 0
     if not model.startswith("droid/"):
         return True
     prompt = ROOT / "jobs" / ".ping.txt"
@@ -127,7 +148,7 @@ def models_in(configs) -> list[str]:
     for c in configs:
         d = json.loads((ROOT / c).read_text())
         ms |= set(d.get("tiers") or [])
-        ms |= {d.get(k) for k in ("senior_reviewer_model", "planner_model") if d.get(k)}
+        ms |= {d.get(k) for k in ("senior_reviewer_model", "planner_model", "takeover_model") if d.get(k)}
     return sorted(m for m in ms if m)
 
 

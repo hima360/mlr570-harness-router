@@ -21,8 +21,11 @@ before working around it.
    Exception (agreed 2026-11-17, PR "GLM cached price"): `cost_usd` may be rewritten when the price table
    itself was wrong, only by `scripts/recompute_cost.py`, only that field, by the file's owner, and the price
    fix and the rewrite land in the same approved PR. Token counts, `passed` and every other field stay as logged.
-   Applied once: GLM-5.3 Flash cached tokens were priced at $0 instead of the $0.03/M list price
-   (https://docs.z.ai/guides/overview/pricing).
+   Applied twice: GLM-5.3 Flash cached tokens were priced at $0 instead of the $0.03/M list price
+   (https://docs.z.ai/guides/overview/pricing); GPT-6.1 Sol cached tokens were priced at $0 instead of the
+   $0.10/M standard list price (https://developers.openai.com/api/docs/models/gpt-6.1-sol, agreed 2026-11-20).
+   For the Sol fix the shared price table changes in its own PR first; each owner then rewrites `cost_usd` in
+   their own file with `scripts/recompute_cost.py` in a follow-up PR (only Mahek's column uses Sol).
 7. **Failures are data.** Keep failed and timed-out runs in the log. The only rows you may delete
    are `passed: null` rows caused by a parsing bug, and only after fixing `parse_result()`, so they rerun.
    One exception: a run that ended because of the setup, not the agent, may be set aside and rerun.

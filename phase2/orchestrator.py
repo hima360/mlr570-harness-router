@@ -116,6 +116,11 @@ def parse_fix(reply: str, allowed_steps, allowed_actions=FIXER_ACTIONS) -> dict:
     return {"action": a["action"], "note": note}
 
 
+TOOL_PROBE = ("a=; m=; for c in python3 python pip3 pip node npm git curl wget make gcc file ps jq sqlite3 bc; do "
+              "if command -v $c >/dev/null 2>&1; then a=\"$a $c\"; else m=\"$m $c\"; fi; done; "
+              "echo \"--- tools available:$a\"; echo \"--- not installed:$m\"")
+
+
 class Orchestrator:
     def __init__(self, cfg, ledger, trace, router, ask_planner, work, logs_dir: Path | None = None,
                  ask_fixer=None):
@@ -380,6 +385,9 @@ class Orchestrator:
                     "-not -path '*/node_modules/*' | sed -n 's/.*\\.//p' | sort | uniq -c | sort -rn | head -12",
                     timeout_sec=30)
                 out += "\n" + (m.stdout or "")[:3000]
+            if self.cfg.tool_probe:  # v4 B1: which common tools exist, so workers do not guess
+                t = await environment.exec(TOOL_PROBE, timeout_sec=30)
+                out += "\n" + (t.stdout or "")[:600]
             return out
         except Exception as e:
             return f"(listing failed: {e})"

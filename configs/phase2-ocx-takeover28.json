@@ -1,0 +1,59 @@
+{
+  "tiers": [
+    "ocx/zai/glm-5.3-flash",
+    "ocx/zai/glm-5.3-flash",
+    "ocx/anthropic/claude-opus-5-5"
+  ],
+  "planner_model": "ocx/anthropic/claude-opus-5-5",
+  "fixer_model": "ocx/anthropic/claude-opus-5-5",
+  "policy": "planner",
+  "confidence_threshold": 0.35,
+  "base_url": "http://127.0.0.1:10100/v1",
+  "api_key": "local",
+  "prices_per_million": {
+    "ocx/zai/glm-5.3-flash": {
+      "input": 0.15,
+      "cached": 0.03,
+      "output": 0.5
+    },
+    "ocx/anthropic/claude-opus-5-5": {
+      "input": 4.0,
+      "cached": 0.2,
+      "output": 20.0
+    }
+  },
+  "max_plan_steps": 8,
+  "max_parallel": 3,
+  "worker_step_limit": 40,
+  "worker_command_timeout": 180,
+  "check_timeout": 300,
+  "random_seed": 570,
+  "reasoning_effort": {
+    "ocx/anthropic/claude-opus-5-5": "medium",
+    "ocx/zai/glm-5.3-flash": "high"
+  },
+  "prices_source": "List prices (Anthropic, Z.ai pricing pages, checked 2026-11-17). Models through opencodex: GLM-5.3 Flash on Ammar's Z.ai Coding Plan, Opus 5.5 on the active Claude account. Same policy as phase2-droid-glm-takeover28.json (v2.8); only the backend differs (2026-11-18). Per-call output cap 32k tokens (Droid-era GLM p99 ~32k; 2026-11-18 API runs had 61k-token runaway calls). GLM effort pinned to high: Z.ai's API default is max, Droid's default was high (docs.z.ai concept-param, droid exec --help, 2026-11-18). Builder wall time 1500 -> 3300 s: GLM through opencodex streams 58-59 output tok/s vs 129-141 under Droid (long calls, v4d4/v4d5 vs dv8/dv13/ho2), so the same work needs ~2.2x the time; the 50-command limit is unchanged.",
+  "merge_chains": true,
+  "reviewer_model": "",
+  "acceptance_model": "",
+  "planner_explore": 8,
+  "lead_reviews": 2,
+  "best_of_models": [],
+  "planner_top_tier": true,
+  "single_step_tier": 1,
+  "cli_timeout_by_model": {
+    "ocx/anthropic/claude-opus-5-5": 300,
+    "ocx/zai/glm-5.3-flash": 600
+  },
+  "planner_role": "advisor",
+  "senior_reviewer_model": "ocx/anthropic/claude-opus-5-5",
+  "senior_review_rounds": 1,
+  "senior_review_explore": 3,
+  "senior_verify": false,
+  "takeover_model": "ocx/anthropic/claude-opus-5-5",
+  "takeover_first_step_limit": 50,
+  "takeover_first_wall_sec": 3300,
+  "takeover_step_limit": 60,
+  "measure_targets": false,
+  "max_output_tokens": 32000
+}
