@@ -156,20 +156,20 @@ steps; the Arch-Router fallback never fired in logged runs, and a fine-tuned Lay
 
 ## Section outline
 
-| # | Section | Main points | Writer | Pages |
-| --- | --- | --- | --- | --- |
-| 1 | Abstract | Thesis, RQ1-RQ3, contributions, headline numbers | Mahek (last) | ~200 words |
-| 2 | Introduction | Claim 1, RQs, contributions | Mahek | ~1 |
-| 3 | Related work | Agentic benchmarks (SWE-bench, Terminal-Bench, SWE-Bench Pro); harness effects (SWE-agent, OpenHands); routing and cascades (RouteLLM, FrugalGPT, AutoMix, Arch-Router, NVIDIA classifier); learning to defer; multi-agent coordination (MetaGPT) | Mahek | ~0.75 |
-| 4 | Phase 1 method | Grid, task plan, exclusions, variance runs, clean-harness rules, pinned versions, list-price cost (RULES.md) | Ammar | ~0.75 |
-| 5 | Phase 1 results | Table, Pareto figure, harness effect, RQ1a, RQ1b, reliability, variance | Ammar | ~1 |
-| 6 | Phase 2 method | v1 design and why it was replaced (claim 6); v2.8; baselines in the same harness | drafted from repo docs; Ibrahim checks | ~1.25 |
-| 7 | Phase 2 setup | 12 dev + 18 evaluation tasks, runs, providers, list prices | drafted; Ibrahim checks | ~0.5 |
-| 8 | Phase 2 results | Splitting results, cascade table, provider replication, ablation table | drafted; Ibrahim checks | ~1.25 |
-| 9 | Discussion | Why deferral after the attempt works; where the cost goes; harness and provider are part of the system; list price vs subscription | Ibrahim | ~0.75 |
-| 10 | Limitations | Compute budget first, then small samples, backends that change, router baselines offline only | Ammar | ~0.5 |
-| 11 | Conclusion | Thesis restated with the main numbers | Mahek | ~0.25 |
-| 12 | Appendices | Per-task tables, prices, harness versions, rerun and void rules, judge and takeover prompts | Ammar (Phase 1), drafted (Phase 2) | - |
+| # | Section | Main points | Writer |
+| --- | --- | --- | --- |
+| 1 | Abstract | Thesis, RQ1-RQ3, contributions, headline numbers | Mahek (last) |
+| 2 | Introduction | Claim 1, RQs, contributions | Mahek |
+| 3 | Related work | Agentic benchmarks (SWE-bench, Terminal-Bench, SWE-Bench Pro); harness effects (SWE-agent, OpenHands); routing and cascades (RouteLLM, FrugalGPT, AutoMix, Arch-Router, NVIDIA classifier); learning to defer; multi-agent coordination (MetaGPT) | Mahek |
+| 4 | Phase 1 method | Grid, task plan, exclusions, variance runs, clean-harness rules, pinned versions, list-price cost (RULES.md) | Ammar |
+| 5 | Phase 1 results | Table, Pareto figure, harness effect, RQ1a, RQ1b, reliability, variance | Ammar |
+| 6 | Phase 2 method | v1 design and why it was replaced (claim 6); v2.8; baselines in the same harness | drafted from repo docs; Ibrahim checks |
+| 7 | Phase 2 setup | 12 dev + 18 evaluation tasks, runs, providers, list prices | drafted; Ibrahim checks |
+| 8 | Phase 2 results | Splitting results, cascade table, provider replication, ablation table | drafted; Ibrahim checks |
+| 9 | Discussion | Why deferral after the attempt works; where the cost goes; harness and provider are part of the system; list price vs subscription | Ibrahim |
+| 10 | Limitations | Compute budget first, then small samples, backends that change, router baselines offline only | Ammar |
+| 11 | Conclusion | Thesis restated with the main numbers | Mahek |
+| 12 | Appendices | Per-task tables, prices, harness versions, rerun and void rules, judge and takeover prompts | Ammar (Phase 1), drafted (Phase 2) |
 
 Main-text length is open; the group decides (8 pages is the usual conference limit, if we want that option).
 

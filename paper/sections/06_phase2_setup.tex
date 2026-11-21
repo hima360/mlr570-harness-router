@@ -1,7 +1,14 @@
-% DRAFTED; Ibrahim checks. ~0.5 page.
-% STATES: 30 Terminal-Bench 4.0 tasks: 12 dev (design decisions), 18 evaluation (no overlap; 9 also Phase 1
-% tasks). The 18 were in an early baseline sweep (2026-11-02) that motivated v2.8; no setting tuned on them after.
-% Evaluation: 2 runs per task with GLM served by Factory (Droid); 1 run per task with GLM served by Z.ai and Opus
-% by Anthropic, both through opencodex (our local tool for using subscriptions from any harness). List prices.
+% DRAFTED; Ibrahim checks.
 \section{Phase 2 Setup}
-\todo{Phase 2 setup.}
+\label{sec:p2setup}
+
+We used 30 Terminal-Bench~4.0 tasks: 12 development tasks for design decisions and 18 evaluation tasks for the
+final comparison. The two sets do not overlap; 9 of the 18 evaluation tasks also appear in Phase~1. All 18 were
+part of an early 37-task baseline sweep whose overall results motivated the v2.8 design; no setting was tuned on
+them after v2.8 was fixed, and the evaluation used fresh runs.
+
+The evaluation tasks were drawn with seeds 570--572. Each ran twice per condition with both models served through Factory's Droid
+subscription. When that subscription ended, we ran each evaluation task once more per condition with GLM-5.3
+Flash served by Z.ai and Opus by Anthropic. Both were reached through opencodex, a local tool we use to route
+subscription access to any harness; it is not a model provider. A task counts as solved when every hidden test
+passes. Cost is computed from logged tokens at public list prices, not from what the subscriptions cost us.

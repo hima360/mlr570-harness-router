@@ -1,6 +1,28 @@
-% WRITER: Ibrahim. ~0.75 page.
-% POINTS: why deferral after the attempt works where prediction from text does not; where the cascade's cost goes
-% (94% Opus takeover; Opus re-explores before its first edit, median 3 commands); harness and provider are part of
-% the system being measured and should be reported with scores; list price vs subscription cost.
+% WRITER: Ibrahim (first draft written for review).
 \section{Discussion}
-\todo{Discussion.}
+\label{sec:discussion}
+
+\paragraph{The harness is part of the system.}
+Both phases point the same way. In Phase~1, the same model passed between 4 and 16 of 40 runs depending on the
+harness, a wider spread than the gap between the two models we compared. In Phase~2, the same two models produced
+different results depending on how the harness divided the work between them, and, more tentatively, on which
+provider served the inexpensive model. A score reported under a model's name is therefore a property of the
+model, the harness and the serving setup together, and comparisons between models should state all three.
+
+\paragraph{Why deferring after the attempt works.}
+Our first design tried to decide, before any work was done, which model each step needed. On Terminal-Bench the
+task text did not carry that information, and splitting coupled tasks added failures of its own. The cascade
+avoids both problems: the inexpensive model's attempt exposes how hard the task is, and the judge decides on the
+basis of a concrete result rather than a description. This is the same idea as learning to defer, applied after
+an attempt rather than to a single prediction.
+
+\paragraph{Where the cost goes.}
+The cascade lowered cost per solved task but raised total cost, because 94\% of its spend is the Opus takeover.
+The takeover also repeats work: Opus ran a median of three commands to re-explore the container before its first
+edit. Shortening the takeover, for example by handing over a verified summary of what the builder established,
+is the most direct way to reduce total cost without changing who solves the task.
+
+\paragraph{What cost means.}
+We report cost at public list prices so that conditions are comparable. Under flat subscriptions, as in our
+experiments, the extra list-price cost of the cascade is consumed quota rather than money, and work done by the
+inexpensive model is close to free. The cost a practitioner sees therefore depends on how the models are bought.
