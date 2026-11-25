@@ -1,15 +1,19 @@
 # MLR570: harness-aware, cost-efficient model routing
 
 Course project for MLR570 (Advanced Machine Learning). It asks whether the agent harness changes cost
-and pass rate, and whether a small local router can cut cost by sending each step of a task to the
-cheapest capable model. The write-up is in `paper/`.
+and pass rate, and whether a harness that defers to a strong model only when needed can cut cost per
+solved task. The write-up is in `paper/`.
 
 1. **Phase 1, harness study.** 3 models (Claude Sonnet 5.5, GPT-6.1 Sol, GLM-5.3 Flash) x 4 coding-agent
    harnesses (Claude Code, Codex CLI, Hermes Agent, ZCode), 40 runs per configuration, 480 runs in total.
    Per run we record pass/fail, tokens, cost and time.
-2. **Phase 2, routed multi-agent harness.** A planner splits each task into steps, Laya scores each step
-   (Arch-Router when Laya is unsure), a tier table picks the model, and a verifier escalates failures one
-   tier. The final version is **v2.8** (tag `phase2-v2.8`).
+2. **Phase 2, cascade harness.** Our own harness, run as a Harbor external agent. The final version is
+   **v2.8** (tag `phase2-v2.8`). It keeps each task whole in one container: GLM-5.3 Flash builds first,
+   Claude Opus 5.5 reviews the result once and takes over only if needed, so the decision to defer to the
+   strong model is made after the inexpensive model's attempt, not from the prompt. A first design that
+   split each task into steps and routed each step (planner, Laya, Arch-Router, tier table, verifier) was
+   dropped: Terminal-Bench tasks proved tightly coupled, and routing from task text did not separate tasks
+   by required capability (`paper/sections/05_phase2_method.tex`).
 
 ## Phase 1 results
 
@@ -78,8 +82,11 @@ PYTHONPATH=$PWD .venv/bin/harbor run -p tests/harbor_smoke/hello-file -a phase2.
 .venv/bin/python -m phase2.show_trace jobs/smoke/*/agent
 ```
 
-Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence threshold), `laya`, `arch`,
-`random`, `fixed:<tier>` (`fixed:3` = always Opus, `fixed:0` = always cheapest).
+Policies (`--ak policy=...`): `cascade` (Laya, Arch-Router below the confidence threshold), `laya`, `arch`
+and `random` belong to the earlier per-step routing design (`docs/PHASE2_PLAN.md`), which was dropped; the
+`routed` and `split` setups in `phase2/setups.py` use `laya`. `fixed:<tier>` runs every step on one tier;
+the smoke test above uses `fixed:0` as a single-model baseline. The final v2.8 is setup `takeover28` in
+`phase2/setups.py`: policy `fixed:1` with `configs/phase2-droid-glm-takeover28.json`.
 
 Command line and TUI:
 
