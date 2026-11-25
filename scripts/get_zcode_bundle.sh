@@ -11,7 +11,7 @@ OUT=runs/zcode-0.16.9
 NODE=v24.11.0
 mkdir -p "$OUT"
 
-# The two ZCode 0.16.9 files are in vendor/ (private repo); the app is only a fallback, since newer apps ship a different CLI.
+# The two ZCode 0.16.9 files are in vendor/; the app is only a fallback, since newer apps ship a different CLI.
 for f in zcode.cjs zcode-builtin.json; do
   [ -f "$OUT/$f" ] || cp "vendor/zcode-0.16.9/$f" "$OUT/$f" 2>/dev/null || true
 done

@@ -7,4 +7,45 @@
 % not fully held out, although no setting was tuned on them after the design was fixed."
 % Also: GLM-5.3 Flash alone was not rerun with Z.ai (Section 6).
 \section{Limitations}
-\todo{Limitations.}
+
+\paragraph{Compute budget.}
+All experiments ran on consumer subscription plans (Anthropic, OpenAI, Z.ai and Factory) rather than metered API
+access, which would have cost substantially more at the scale of this study. Subscription plans cap usage per
+5-hour and weekly window, which bounded the number of runs per configuration (40), the number of repeated runs
+used to estimate variance (3 tasks $\times$ 3 runs) and the set of models and harnesses we could include. Larger
+samples, more repeats per task and additional models and harnesses would narrow the uncertainty in our
+comparisons.
+
+\paragraph{Small samples.}
+Each Phase~1 configuration has 40 runs, and the Phase~2 evaluation has 18 tasks with two runs per condition on
+the first provider and one on the second. Single runs are not stable: in Phase~1, the outcome flipped between
+pass and fail in 12 of 36 groups of repeated runs. We therefore treat gaps of one or two tasks as within
+run-to-run variance and draw conclusions only from larger differences.
+
+\paragraph{Evaluation tasks.}
+The 18 evaluation tasks were part of an early baseline sweep that informed the cascade design, so they are not
+fully held out, although no setting was tuned on them after the design was fixed (Section~\ref{sec:p2setup}).
+The second evaluation round, with GLM-5.3 Flash served by Z.ai, covered v2.8 and Opus~5.5 alone; GLM-5.3 Flash
+alone was not rerun with that provider.
+
+\paragraph{Commercial backends.}
+Every model in this study is a commercial service that can change or end. Factory's Droid
+subscription, which served both models in the first Phase~2 evaluation round, ended during the evaluation, and
+the second round had to use a different provider. We pinned harness versions in Phase~1, but results for newer
+harness and model versions may differ.
+
+\paragraph{Cost.}
+All costs are tokens times public list prices, not what we paid under our subscriptions. They show the relative
+cost of configurations under metered pricing; actual costs depend on the subscription plan.
+
+\paragraph{Router baselines.}
+The four routers in our feasibility study (Arch-Router, Laya, the NVIDIA classifier and RouteLLM) were compared
+offline only, on 24 author-labelled tasks. Inside the harness only Laya routed steps, the Arch-Router fallback
+never fired in logged runs, and we did not build a fine-tuned Laya.
+
+\paragraph{Run conditions.}
+Each Phase~1 model was run by a different author on their own machine: two Macs and one Windows machine. The
+number of runs executed at the same time also differed: five for Sonnet~5.5 and two for GLM-5.3 Flash and
+GPT-6.1 Sol. Wall time depends on the machine and on how many runs share it, so the median times we report are
+comparable across harnesses for the same model, but differences in time between models may partly reflect these
+run conditions.

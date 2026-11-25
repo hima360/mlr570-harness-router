@@ -28,4 +28,55 @@ GPT-6.1 Sol & Hermes & 14 & 83.91 & 5.99\\
 \bottomrule
 \end{tabular}}
 \end{table}
-\todo{Phase 1 results text and Pareto figure.}
+\begin{figure}[t]
+\centering
+\input{figures/p1_pareto}
+\caption{Phase 1 cost and solved runs for each configuration (40 runs each). Colour is the model, the label the
+harness (CC Claude Code, CX Codex CLI, HE Hermes, ZC ZCode). The dashed line is the Pareto frontier: no other
+configuration solves more runs at a lower cost. Cost at public list prices.}
+\label{fig:p1pareto}
+\end{figure}
+
+Table~\ref{tab:p1} lists pass counts and cost for the 12 configurations, and Figure~\ref{fig:p1pareto} plots
+cost against solved runs. Over all four harnesses, GPT-6.1 Sol solved 65 of 160 runs (41\%, \$249.99, \$3.85 per
+solve), Claude Sonnet~5.5 51 of 160 (32\%, \$135.76, \$2.66 per solve) and GLM-5.3 Flash 43 of 160 (27\%,
+\$58.02, \$1.35 per solve).
+
+\paragraph{The harness changes pass rate, cost and time (RQ1).}
+With the model held fixed, the harness moved the number of solved runs from 4 to 16 of 40 for GLM-5.3 Flash,
+from 10 to 16 for Sonnet~5.5 and from 14 to 18 for Sol. Changing the harness moved GLM's pass rate from 10\% (Codex
+CLI) to 40\% (Claude Code), a difference of 30 percentage points. By comparison, when each model's runs are pooled
+over all four harnesses, the strongest model (Sol, 41\%) and the weakest (GLM, 27\%) differ by 14 percentage
+points. For Sol
+the harness mostly moved cost: Sol solved 18 runs under Codex CLI for \$17.83 and 17 under ZCode for \$126.05,
+seven times the cost for one solve fewer.
+
+\paragraph{No single best harness (RQ1a).}
+The ranking of harnesses depends on the model. Codex CLI was Sol's best harness (18 of 40), third for Sonnet
+(11) and GLM's worst (4). ZCode was second for GLM and for Sol but last for Sonnet. Each provider's own harness
+did well for its model: Codex for Sol, ZCode near the top for GLM and Claude Code at the top for Sonnet.
+Claude Code was also at the top for GLM. Some of these rankings depend on very small differences. Sol's three best
+harnesses, Codex CLI, ZCode and Claude Code, solved 18, 17 and 16 runs, only one run apart. Because repeated runs of
+the same task often change between pass and fail, gaps of one or two runs are within run-to-run variance and
+could reverse if the runs were repeated. Larger gaps, such as GLM's 16 solved runs under Claude Code against 4
+under Codex CLI, are not explained by this variance.
+
+\paragraph{A cheaper model in a matched harness (RQ1b).}
+Choosing the harness can matter as much as choosing the model. In Claude Code all three models solved 16 of 40
+runs, at \$0.63 per solve for GLM, \$1.39 for Sol and \$2.13 for Sonnet. In ZCode, GLM solved 15 runs against
+Sonnet's 10. The trade-off is time: in Claude Code and ZCode, GLM's median run took 47 and 42 minutes, against 10
+and 11 minutes for Sonnet in the same harnesses. In Figure~\ref{fig:p1pareto}, GLM in Claude Code and Sol in Codex
+CLI form the cost--solve frontier: no other configuration solves more runs at a lower cost.
+
+\paragraph{Reliability.}
+The harness also decides whether a run finishes at all. GLM gave no result in 7 of 40 runs under Hermes, against
+0 to 3 under the other harnesses. Over all harnesses, 13 GLM runs and 11 Sol runs (6 of them under Claude Code)
+ended without a result; every Sonnet run produced one. These runs count as not passed.
+
+\paragraph{Run-to-run variance.}
+Agents are not deterministic: the same model, harness and task can pass once and fail the next time. Each
+configuration ran three tasks three times (Appendix~\ref{app:p1}). In 12 of these 36 groups the outcome
+flipped between pass and fail, and 2 more changed only because a run gave no result. We therefore treat gaps of
+one or two tasks as possible noise and call a difference real only when it is larger.
+% PENDING GROUP AGREEMENT (not in PAPER_PLAN yet, so not stated): why GLM does worst under Codex CLI
+% (Ammar's log check: runs finish normally but GLM stops early and declares the task done).

@@ -6,4 +6,42 @@
 % instructor. Clean harnesses (no personal settings), pinned versions, logged fields, cost = tokens x list price.
 \section{Phase 1: Harness Study}
 \label{sec:p1method}
-\todo{Phase 1 method.}
+
+\paragraph{Design.}
+Phase~1 holds the model fixed and varies the harness. Three models, Claude Sonnet~5.5, GPT-6.1 Sol and
+GLM-5.3 Flash, each run in four harnesses: Claude Code, Codex CLI, Hermes Agent and ZCode. This gives 12
+configurations. Each author ran one model in all four harnesses.
+
+\paragraph{Tasks.}
+Tasks come from Terminal-Bench~4.0~\cite{tb4} and the public split of SWE-Bench Pro~\cite{deng2025sweprobench}.
+A plan generated once with seed 570 draws 30 Terminal-Bench and 6 SWE-Bench Pro tasks and repeats three
+Terminal-Bench tasks two more times to measure run-to-run variance, for 42 runs per configuration. Two
+Terminal-Bench tasks whose environments need a GPU or more than 14 CPUs are excluded from every configuration.
+This leaves 40 runs per configuration over 34 distinct tasks (28 Terminal-Bench, 6 SWE-Bench Pro), or 480 runs
+in total. The plan was not edited after it was generated. The number of runs was set by subscription quotas and
+agreed with the instructor.
+
+\paragraph{Execution.}
+All runs use the Harbor evaluation framework (version 0.24.0). For each run, Harbor starts the task's Docker
+environment, installs the harness, passes it the task instruction and, when the agent stops, runs the task's
+hidden tests. A run passes when the verifier returns a reward of 1. A shared runner script executes the plan and
+stops any run after 180 minutes. Where a harness cannot reach a model's provider directly, its requests go
+through opencodex, a local tool that lets a subscription plan be used from any harness.
+
+\paragraph{Clean, pinned harnesses.}
+Every harness runs with its default settings: no personal skills, instruction files (\texttt{CLAUDE.md},
+\texttt{AGENTS.md}), memory, plugins, MCP servers, hooks or custom prompts. Codex's bundled skills and memories
+are turned off. Versions are pinned and auto-updates are off: Claude Code 2.1.316, Codex CLI 0.162.1, Hermes
+Agent 0.21.4 and ZCode 0.16.9. Codex runs at medium reasoning effort. ZCode's headless mode always requests the
+maximum effort, so its requests are set to medium as well.
+Claude Code runs at its default effort for Sonnet~5.5 and GLM-5.3 Flash and at medium effort for GPT-6.1 Sol.
+
+\paragraph{Measurements.}
+Each run logs whether it passed, its wall time, and its input, output and cached tokens. Cost is tokens times
+the public list price per million tokens, with cached tokens at the cached rate
+(Appendix~\ref{app:p1}); it is not what we paid under our subscriptions. A run that ends without a result,
+for example at the 180-minute limit, counts as not passed. Failed and timed-out runs stay in the log. A run that
+ended because of the setup rather than the agent (a full disk, a dropped network, a machine restart, a proxy
+error or a subscription usage cap) was set aside and rerun with the same settings; Appendix~\ref{app:p1} lists
+these reruns.
+

@@ -2,6 +2,39 @@
 % STATES: the thesis (a harness is not a neutral container); RQ1-RQ3; the four contributions;
 % headline numbers: GLM 4-16 of 40 across harnesses; GLM = Sonnet in Claude Code (16/40) at $0.63 vs $2.13 per
 % solve; v2.8 11/36 vs Opus alone 4/35 at $3.80 vs $7.83 per solve (34% higher total cost).
+% WRITER: Mahek (write last).
 \begin{abstract}
-\todo{Abstract, written last.}
+The performance of an agentic large language model (LLM)
+depends not only on the model itself but also on the harness
+through which it interacts with its environment. We argue
+that the harness is not a neutral container, but a design
+variable that influences task success, cost and execution
+time. We investigate three research questions concerning
+model-harness compatibility, cost-efficient model routing
+and serving-provider sensitivity.
+First, we evaluate three models across four harnesses on
+Terminal-Bench 4.0 and SWE-Bench Pro, comprising 480 runs.
+GLM-5.3 Flash solves between 4 and 16 of 40 runs depending
+on the harness. In Claude Code, it matches Claude Sonnet
+5.5 at 16 of 40 solved runs, while costing \$0.63 per
+solve compared with \$2.13 at public list prices. Second, we find that
+decomposing tightly coupled agentic tasks introduces
+coordination failures, motivating whole-task routing.
+Third, we develop a cheap-first cascade harness (v2.8)
+in which GLM-5.3 Flash attempts the task before Claude
+Opus 5.5 reviews the result and takes over when needed.
+The cascade solves 11 of 36 evaluation runs, compared
+with 4 of 35 for Opus alone, reducing cost per solve
+from \$7.83 to \$3.80 (51\%), despite a 34\% increase
+in total cost. This improvement is not statistically
+significant at the available sample size ($p = 0.079$).
+Fourth, an exploratory comparison suggests that serving
+providers may influence agent performance, motivating
+a controlled provider study.
+
+All costs are calculated at public list prices.
+Our findings support evaluating agentic LLM systems
+as a combination of model, harness and serving setup,
+rather than by model name alone.
 \end{abstract}
+

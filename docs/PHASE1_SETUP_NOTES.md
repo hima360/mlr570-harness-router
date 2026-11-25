@@ -1,7 +1,7 @@
 # Phase 1 setup notes (from Ibrahim's Sonnet 5.5 column)
 
-Everything needed to run your column the same way ours ran. Code lives on `phase1/codex-harness`
-(PR #6) until it is merged into `main`.
+How the Sonnet 5.5 column was run: machine, opencodex bridge, model ids, ZCode files and how rows were
+handled. The Codex harness code (PR #6) is merged into `main`.
 
 ## 1. Machine
 
@@ -53,8 +53,8 @@ curl -s http://127.0.0.1:10101/v1/chat/completions -H "Authorization: Bearer $OC
 ```
 
 After the first trials, confirm in `ocx observe logs --limit 50 --json` that `resolvedModel` is GLM and
-`requestedEffort` is medium. Note: `configs/example.json` still has GLM's cached-token price at 0.0
-(see `versions.md`); agree the right value in the group before your batch.
+`requestedEffort` is medium. `configs/example.json` now has GLM's cached-token price at $0.03/M
+(Sol: $0.10/M); see `versions.md`.
 
 ## 4. ZCode files
 
@@ -73,22 +73,25 @@ copy the files from your app.
 
 - **Two `passed: null` Claude Code rows** are `jax-speedrun-gpu` and `live-database-cutover`. They ran
   before PR #5 excluded those two tasks (hardware) and failed at Docker start. They were kept, not
-  deleted; `status.py` and the analysis skip every task in `tasks/excluded.tsv`. Your runner skips them.
+  deleted; `status.py` and the analysis skip every task in `tasks/excluded.tsv`. The runner skips them.
 - **Infrastructure re-runs.** When a trial ended because of the setup rather than the agent (disk full,
   Wi-Fi dropped, laptop restart, opencodex stall, subscription 5-hour cap), its row and folder were moved
-  to `runs/void-*/` with a backup and the trial was rerun. 52 rows were set aside this way: 42 with
-  `passed: null` (no result at all) and 10 recorded as failures (8 Hermes, 2 ZCode). This was not agreed
-  in the group beforehand and goes beyond rule 7 as written; it is up for agreement now (see 6).
+  to `runs/void-*/` with a backup and the trial was rerun. 54 rows were set aside this way: 42 with
+  `passed: null` (no result at all) and 12 recorded as failures (8 Hermes, 2 ZCode, 2 Claude Code).
+  This was done before the rule existed; it is now covered by `RULES.md` rule 7 (see 6).
 - **Hermes `photonic-waveguide-routing` r1** is one of those: the try in the log is the 4th, after three
   opencodex stalls. It still failed. Earlier rows are in `runs/void-hermes-stall*/` and in git history
   (commit 8381972).
-- **Not consistent yet:** two Claude Code trials (`pretrain-shard-corruption`, `photonic-waveguide-routing`)
-  were cut by the 5-hour cap and kept as failures, while Hermes cap-cut trials were rerun.
+- **Cap-cut Claude Code trials, rerun.** Two Claude Code trials (`pretrain-shard-corruption`,
+  `photonic-waveguide-routing`) were cut by the 5-hour cap and first kept as failures. They were rerun on
+  2026-11-08 (commit `25fec04`, Claude Code 2.1.316) and both passed. The old rows and folders are kept in
+  `runs/void-cc-5hcap-1809`, so the column is consistent with the Hermes cap-cut reruns.
 
-## 6. Open for the group
+## 6. Outcome: rerun rule agreed
 
-Proposed rule to add to `RULES.md`, so every column handles this the same way: a trial that ends because
-of infrastructure (stated reason: disk, network, restart, proxy stall, plan cap) is moved to
-`runs/void-<reason>/` with its row and folder kept, and rerun; the reason is posted in the group. If
-agreed, Ibrahim reruns the two cap-cut Claude Code trials so his column is consistent. If not agreed,
-the 10 set-aside failure rows go back into the log and the reruns are dropped.
+`RULES.md` rule 7 now covers this: a trial that ends because of the setup (disk, network, restart,
+opencodex stall or error, subscription cap) is moved to `runs/void-<reason>/` with its row and folder
+kept, and rerun; the task and reason are posted in the group. It was proposed on 2026-11-08 (PR #7,
+commit `27e79ea`) and agreed and merged on 2026-11-17 (PR #7, merge `99d1d46`), the same day PR #11
+(merge `93e6503`) extended it to runs that hit a time limit, rerun with the same limits. Wrong answers
+and agent crashes stay in the log. The set-aside rows described in section 5 therefore stay set aside.

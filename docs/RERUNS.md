@@ -76,8 +76,8 @@ with the reasons below, not set aside again).
 The two takens verifier timeouts are not setup failures: the agents ran and the checker did not finish
 (takens peaks at about 63% of Docker's 3.7 GB limit).
 
-Sol cached price: `gpt-6.1-sol` has `cached_tokens: 0.0` in the price tables; costs in this file are
-understated until that is corrected (see the price PR).
+Sol cached price: `gpt-6.1-sol` is now $0.10/M in the price tables (PR #15), and `results/mahek.jsonl`
+was recomputed with it (PR #17).
 
 ## Before a rerun, check
 

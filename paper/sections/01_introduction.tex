@@ -8,7 +8,33 @@
 % (4) RQ1 (RQ1a, RQ1b), RQ2, RQ3 (exploratory), then the four contributions (list).
 % Do NOT frame the paper around frontier vs mid-tier pricing; the thesis is the harness.
 \section{Introduction}
-\todo{Introduction.}
+
+\label{sec:intro}
+
+Large language model (LLM) agents are now evaluated on tasks that require acting in an environment rather than
+answering a question: resolving real GitHub issues in SWE-bench~\cite{jimenez2024swebench} and SWE-Bench
+Pro~\cite{deng2025sweprobench}, or completing multi-step work in a terminal in
+Terminal-Bench~\cite{merrill2026terminalbench,tb4}. Results on these benchmarks are usually discussed by model
+name. Yet a model never meets these tasks on its own. It runs inside a \emph{harness}: the software that writes
+its prompts, gives it tools, keeps its memory, decides when to retry and limits how many turns it may take. Every
+reported score is therefore the score of a model inside a harness.
+
+The harness is usually treated as a neutral container that passes the task to the model and the model's commands
+to the environment. We argue that it is part of the system being measured. In Phase~1 of this study the same model,
+given the same tasks, passed a very different number of runs depending on the harness: GLM-5.3 Flash passed
+between 4 and 16 of 40 runs, Claude Sonnet~5.5 between 10 and 16, and GPT-6.1 Sol between 14 and 18. The harness
+also changed what a solve cost. GPT-6.1 Sol solved 18 runs for \$17.83 under Codex CLI and 17 runs for \$126.05
+under ZCode, about seven times as much for a similar pass rate (cost at public list prices).
+
+If the harness matters this much, its design is also a lever. A harness can decide which model works on a task,
+what that model sees and when another model takes over. We test this by building our own harness around two
+fixed models. A first design split each task into steps and routed each step from its description, but
+Terminal-Bench tasks proved tightly coupled, and routing from task text did not separate tasks by required
+capability. The final design (v2.8) keeps the task whole: GLM-5.3 Flash builds first, Claude Opus~5.5 reviews the
+result once and takes over only if needed. The decision to defer to the strong model is thus made after the
+inexpensive model's attempt, not from the prompt. On 18 evaluation tasks, v2.8 solved 11 of 36 runs against 4 of
+35 for Opus alone, with 51\% lower cost per solved task and 34\% higher total cost; the difference is consistent
+in direction but not statistically significant at this sample size (Section~\ref{sec:p2results}).
 
 \paragraph{Research questions.}
 \textbf{RQ1.} For a fixed model, how much does the harness change pass rate, cost and time?
@@ -18,3 +44,17 @@
 the strong model alone on solves and cost per solve?
 \textbf{RQ3 (exploratory).} With model and harness fixed, does the provider serving the model change pass rate,
 cost and time?
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item \textbf{A harness study (RQ1, RQ1a, RQ1b).} Three models in four existing harnesses on Terminal-Bench~4.0
+        and SWE-Bench Pro, 40 runs per configuration and 480 runs in total
+        (Section~\ref{sec:p1method} and Table~\ref{tab:p1}).
+  \item \textbf{Splitting coupled tasks.} Evidence that Terminal-Bench tasks share hidden state across steps, so
+        decomposing them adds coordination failures; this finding led us to route whole tasks instead
+        (Section~\ref{sec:p2method}).
+  \item \textbf{A cheap-first cascade with strong-model review (RQ2).} A model cascade in the spirit of
+        learning to defer, in which deferral is decided after the inexpensive model's attempt
+        (Sections~\ref{sec:p2method}--\ref{sec:p2results}).
+  \item \textbf{Serving-provider sensitivity (RQ3, exploratory).} The same model served by two providers
+        (Factory via Droid; Z.ai), with model and harness fixed (Section~\ref{sec:p2results}).
+\end{enumerate}

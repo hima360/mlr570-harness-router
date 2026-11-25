@@ -1,3 +1,40 @@
 % WRITER: Mahek. Restate the thesis with the main numbers; future work: controlled provider test.
 \section{Conclusion}
-\todo{Conclusion.}
+\label{sec:conclusion}
+
+This study shows that the harness is not a neutral container
+for an LLM, but an important design variable in agentic
+systems. Across 480 runs involving three models and four
+harnesses, changing the harness alone moved the pass rate
+of GLM-5.3 Flash from 10\% to 40\%, while GPT-6.1 Sol
+achieved similar pass rates at a sevenfold difference in
+cost. In Claude Code, all three models solved 16 of 40
+runs, with GLM-5.3 Flash achieving the lowest cost per
+solve at \$0.63. These findings show that a well-matched
+harness can allow an inexpensive model to compete with
+more expensive alternatives.
+
+Our proposed cascade harness (v2.8) keeps tasks whole
+and postpones the routing decision until the inexpensive
+model has attempted the task. On 18 evaluation tasks,
+the cascade solved 11 of 36 runs (31\%), compared with
+4 of 35 (11\%) for Claude Opus 5.5 alone. It reduced
+cost per solved task by 51\%, from \$7.83 to \$3.80,
+although total cost increased by 34\%. While the
+improvement is not statistically significant at this
+sample size ($p = 0.079$), the results suggest that an
+inexpensive model can contribute useful intermediate work
+even when it cannot solve the task independently.
+
+The exploratory provider comparison further suggests
+that the serving setup may influence agent performance.
+Future work should conduct a controlled provider study
+with the model, harness, tasks, reasoning effort and
+execution budget held fixed, using larger samples and
+repeated runs to isolate provider effects.
+
+Overall, agentic LLM performance and cost efficiency
+should be evaluated at the system level rather than
+by model name alone. Joint consideration of the model,
+harness and serving provider offers a promising direction
+for building more cost-efficient agentic systems.

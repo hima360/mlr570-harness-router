@@ -2,14 +2,95 @@
 % Phase 2 per-task tables, judge and takeover prompts (drafted).
 % Phase 2 ablation numbers: docs/OVERNIGHT_LOOP.md (2026-11-02/03 log), docs/V4_STUDY.md.
 \section{Additional Results}
-\todo{Phase 1 appendix (Ammar).}
+\raggedbottom % no stretched gaps between paragraphs next to the large tables
+\subsection{Phase 1 details}
+\label{app:p1}
+
+\paragraph{Software and settings.}
+Table~\ref{tab:p1versions} lists the pinned versions and the settings that differ from each harness's defaults.
+All runs used Harbor 0.24.0, Terminal-Bench 4.0.0 and the public split of SWE-Bench Pro (731 tasks), with a
+180-minute limit per run. Models other than Sonnet~5.5 under Claude Code were reached through opencodex 2.48.0
+and a small local forwarding service that lets the task containers call it. Sonnet~5.5 ran five runs at a time;
+GLM-5.3 Flash and GPT-6.1 Sol ran two. For GPT-6.1 Sol, the agent-installation time limit was raised from 6 to
+18 minutes for Claude Code, Codex CLI and Hermes, because installation was slow on that machine.
+
+\begin{table}[!h]
+\centering\small
+\caption{Phase 1 harness versions and non-default settings.}
+\label{tab:p1versions}
+\begin{tabular}{@{}llp{0.5\columnwidth}@{}}
+\toprule
+Harness & Version & Settings\\
+\midrule
+Claude Code & 2.1.316 & Effort: default (Sonnet, GLM), medium (Sol)\\
+Codex CLI & 0.162.1 & Effort medium; bundled skills and memories off\\
+Hermes Agent & 0.21.4 & Tool sets: terminal, file, web, todo\\
+ZCode & 0.16.9 & Effort medium (headless mode asks for maximum)\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Prices.}
+Cost is computed per run from the logged tokens and the list prices in Table~\ref{tab:p1prices}, with cached
+input tokens at the cached rate. The first shared price table priced cached tokens at \$0 for GLM-5.3 Flash and
+GPT-6.1 Sol. Both were corrected to the providers' list prices, and only the cost field was recomputed from the
+logged tokens; pass results and token counts are as logged.
+
+\begin{table}[!h]
+\centering\small
+\caption{List prices used for Phase 1 cost, in US dollars per million tokens.}
+\label{tab:p1prices}
+\begin{tabular}{lrrr}
+\toprule
+Model & Input & Cached input & Output\\
+\midrule
+Claude Sonnet 5.5 & 2.00 & 0.10 & 10.00\\
+GPT-6.1 Sol & 2.00 & 0.10 & 10.00\\
+GLM-5.3 Flash & 0.15 & 0.03 & 0.50\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Runs with no result.}
+A run with no result counts as not passed. GLM-5.3 Flash has 13 such runs: 12 stopped at the 180-minute limit and
+one at Harbor's agent time limit. GPT-6.1 Sol has 11: in five the agent installation did not finish in time, three
+ended within 25 seconds without an error file, two finished but the task's tests did not complete within 30
+minutes, and one ended with no tokens and no error shown. Every Sonnet~5.5 run produced a result.
+
+\paragraph{Reruns.}
+Failed and timed-out runs stay in the log. A run that ended because of the setup rather than the agent (a full
+disk, a dropped network, a machine restart, a proxy error or a subscription usage cap) was set aside and rerun with
+the same settings; the original row and run folder were kept. Wrong answers and agent crashes were not rerun.
+For GLM-5.3 Flash, 13 runs were set aside and rerun: eight cut short when the machine went to sleep, one cut short
+by the weekly usage cap, and four that never reached the model, which another author reran on their machine with
+the same configuration (three passed, one failed). Of the nine runs cut short, five had no result, three had been
+logged as failures and one as a pass; all nine were rerun regardless of their logged outcome.
+For Sonnet~5.5, 54 runs were set aside and rerun because of a full disk, a dropped network, a machine restart, a
+proxy stall or the 5-hour usage cap.
+Runs of GPT-6.1 Sol were set aside and rerun under the same rule.
+
+\paragraph{Tasks.}
+The plan (seed 570) drew 30 Terminal-Bench~4.0 and 6 SWE-Bench Pro tasks and repeated three Terminal-Bench tasks
+(batched-eval-parity, data-anonymization and interleaved-vigenere) two more times. Two Terminal-Bench tasks,
+live-database-cutover and jax-speedrun-gpu, need a GPU or more than 14 CPUs and were left out for every
+configuration. Table~\ref{tab:p1pertask} gives the outcome of every remaining run.
+
+\input{tables/p1_per_task}
 
 \subsection{Phase 2 variants}
 \label{app:p2}
 
-\begin{table}[h]
+Table~\ref{tab:ablations} lists the variants of v2.8 discussed in Section~\ref{sec:p2results}. Each change was
+first run on the 12 development tasks and compared with v2.8 on the same tasks. Only v3.5, which keeps the Opus
+prompt cache intact, matched v2.8 on the development tasks at lower cost, so it was the only variant also run on
+the 18 evaluation tasks (last row). The other variants solved fewer development tasks than v2.8 and were not run
+on the evaluation tasks.
+
+% Not a floating table: placed exactly here, under the text above (needs \usepackage{capt-of}).
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \centering\small
-\caption{Variants of v2.8 on the development tasks. Each variant is compared with v2.8 (or, for v3.7, with v3.5)
+\captionof{table}{Variants of v2.8 on the development tasks. Each variant is compared with v2.8 (or, for v3.7, with v3.5)
 on the same tasks. Solved runs and cost at public list prices.}
 \label{tab:ablations}
 \resizebox{\columnwidth}{!}{%
@@ -32,4 +113,4 @@ v3.5 & Evaluation tasks (18 $\times$ 2) & 7/36, \$35.88 & 11/36, \$41.83\\
 \smallskip
 \footnotesize $^a$ The takeover gave up on a task that v2.8 solved, so the variant was stopped.
 $^b$ Run with Z.ai-served GLM and the reference with Factory-served GLM, so the two rows differ in provider and run count and are not directly comparable (n.c.).
-\end{table}
+\end{minipage}

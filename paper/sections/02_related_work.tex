@@ -6,4 +6,47 @@
 % (3) Learning to defer / selective prediction; multi-agent coordination: MetaGPT [hong2024metagpt].
 % Position our work: routers decide from the prompt; our cascade decides after the cheap model's attempt.
 \section{Related Work}
-\todo{Related work.}
+\label{sec:related}
+
+\paragraph{Agentic benchmarks and harness effects.}
+SWE-bench~\cite{jimenez2024swebench} evaluates whether a model can resolve real GitHub issues: it collects 2,294
+issues from 12 Python repositories and checks each proposed patch against the repository's tests. SWE-Bench
+Pro~\cite{deng2025sweprobench} extends this design to 1,865 longer problems from 41 actively maintained
+repositories, many of which need changes across several files, and keeps part of its data private to limit
+contamination. Terminal-Bench~\cite{merrill2026terminalbench} moves the setting to the command line: each task
+has its own environment, a human-written reference solution and tests that verify the result; we use its
+version~4.0~\cite{tb4}. Work on agent design has shown that the software around the model matters.
+SWE-agent~\cite{yang2024sweagent} found that the interface through which a model reads and edits code changes
+how many issues the same model resolves, and OpenHands~\cite{wang2025openhands} provides an open platform in which
+agents act through a sandboxed shell, code editor and browser. These studies mainly design and improve one
+harness. Our Phase~1 takes the opposite view: it holds the model fixed and compares four existing
+harnesses, for three models, on the same tasks.
+
+\paragraph{Routing and cascades.}
+Model routing aims to send each query to the least expensive model that can handle it. Most routers decide
+before any work is done, from the query text alone. RouteLLM~\cite{ong2024routellm} learns from human preference
+data whether a query needs a strong or a weak model. Arch-Router~\cite{tran2025archrouter}, a 1.5B-parameter
+model, maps each query to user-defined domains and action types and routes by those labels. NVIDIA's prompt
+classifier~\cite{nvidia2026classifier} assigns a task type and scores several dimensions of complexity, such as
+reasoning and domain knowledge, and Laya~\cite{laya2026} returns typed decisions that we used to score the
+capability each step needed in our first design. Cascades instead decide after a model has answered.
+FrugalGPT~\cite{chen2023frugalgpt} queries a sequence of models and stops once a learned scoring function
+accepts an answer, and AutoMix~\cite{aggarwal2024automix} has the smaller model check its own answer and uses a
+router that accounts for the noise in that check to decide whether to call a larger model. Both were designed
+for queries with a single text answer. In our setting the object being judged is the state of a working
+environment after many commands, and we found that routing from task text did not separate tasks by required
+capability (Section~\ref{sec:p2method}). Our cascade therefore keeps the decision until the inexpensive model
+has produced something the strong model can inspect.
+
+\paragraph{Learning to defer and multi-agent coordination.}
+Learning to defer trains a model to either make a prediction or pass the case to an expert, so that the
+combined system performs better~\cite{madras2018predict,mozannar2020consistent}. It is
+closely related to selective prediction, in which a model abstains when it is not confident
+enough~\cite{geifman2017selective}. Our cascade applies the same idea to agents: the inexpensive model always
+acts first, and a stronger model reviews the result and decides whether to take over. In the standard formulation the
+decision to defer is made from the input; here it is made from the outcome of an attempt, and the expert
+continues from that attempt rather than starting again. Multi-agent frameworks such as MetaGPT~\cite{hong2024metagpt} divide a software task among
+agents with fixed roles that pass structured documents to each other. Our first design followed a similar plan,
+with a planner and per-step workers. On Terminal-Bench, however, steps shared hidden state such as files and
+values discovered along the way, so splitting a task added hand-offs in which information was lost.
+
