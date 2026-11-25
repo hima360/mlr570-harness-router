@@ -10,12 +10,16 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage[numbers,sort&compress]{natbib}
 \usepackage{xcolor}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
 \usepackage[section]{placeins} % keep each table inside its own section
+\usepackage{capt-of} % \captionof: a table placed in the text without floating (appendix Table 6)
+\usepackage{stfloats} % lets a two-column table sit at the bottom of a page ([b]), used in the appendix
+\def\dblbotfraction{0.8} % a bottom two-column table may fill up to 80% of the page
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
 
 \title{Harness-Aware, Cost-Efficient Model Routing for Agentic LLM Systems}
-\author{Ammar Almzayek \and Mahek \and Ibrahim Gouda Mohamed\\
-MLR570 Advanced Machine Learning}
+\author{Ammar Almzayek \and Mahek Salia \and Ibrahim Gouda Mohamed}
 \date{}
 
 \begin{document}
