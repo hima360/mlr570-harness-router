@@ -29,7 +29,7 @@ Per-configuration numbers: `paper/sections/04_phase1_results.tex`; plan and fact
 ## Phase 2 results (final version v2.8)
 
 GLM-5.3 Flash builds. Opus 5.5 reviews once and, when the review says "fix", takes over in the same
-container. Held-out evaluation, 18 tasks x 2 runs:
+container. Evaluation tasks, 18 tasks x 2 runs:
 
 | Setup | Solved | Cost | Per solve |
 | --- | --- | --- | --- |
@@ -39,7 +39,7 @@ container. Held-out evaluation, 18 tasks x 2 runs:
 
 - An exploratory comparison on Z.ai (via opencodex) gave 4 / 18 for v2.8 against 2 / 18 for Opus alone.
 - v3.10, a cheaper variant, stopped at 26 of 36 trials when the Droid subscription ended, so it is not
-  compared on the full held-out set.
+  compared on the full evaluation set.
 - Details: `docs/PHASE2_REPORT.md`, `paper/sections/07_phase2_results.tex`, design in `docs/PHASE2_PLAN.md`.
 
 ## Repo layout

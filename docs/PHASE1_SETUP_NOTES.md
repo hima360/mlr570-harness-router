@@ -91,6 +91,7 @@ copy the files from your app.
 
 `RULES.md` rule 7 now covers this: a trial that ends because of the setup (disk, network, restart,
 opencodex stall or error, subscription cap) is moved to `runs/void-<reason>/` with its row and folder
-kept, and rerun; the task and reason are posted in the group. It was agreed on 2026-11-08 (PR #7) and
-extended on 2026-11-17 (PR #11) to runs that hit a time limit, rerun with the same limits. Wrong answers
+kept, and rerun; the task and reason are posted in the group. It was proposed on 2026-11-08 (PR #7,
+commit `27e79ea`) and agreed and merged on 2026-11-17 (PR #7, merge `99d1d46`), the same day PR #11
+(merge `93e6503`) extended it to runs that hit a time limit, rerun with the same limits. Wrong answers
 and agent crashes stay in the log. The set-aside rows described in section 5 therefore stay set aside.
